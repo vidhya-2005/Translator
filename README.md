@@ -88,23 +88,31 @@ The application was successfully tested using a variety of inputs to demonstrate
 * **Real-time Recording:**
     * The microphone input was tested with spoken **Tamil**, which was successfully transcribed and translated.
 
+![output for SPEECH input](speech.png)
+
 * **YouTube URL:**
     * `https://youtube.com/shorts/BbtpBNlOox4?si=RTcIu6pLRkuXybnG` (A short French story).
+
+![output for YOUTUBE URL input](yotube.png)
 
 * **MP3 File:**
     * The application was tested with an MP3 file containing French speech from the following link:
     * `https://media.thefablecottage.com/stories/fr0qb0th7fuv/fr-rapunzel-part1.mp3`
 
+![output for AUDIO mp3 input](mp3.png)
+
 * **MP4 Video from Instagram:**
     * The application was tested with a video from the following link, from which the audio was successfully extracted and translated:
     * `https://www.instagram.com/reel/DJ_JqzQzbkz/?igsh=aGRmaW5md2w1Z2dp`
+
+![output for VIDEO mp4 input](mp4.png)
 
 * **Text (Telugu):**
     ```
     ఒక అడవిలో, ఒక చిన్న కుందేలు ఉండేది. అది ఎప్పుడూ తన స్నేహితులతో ఆడుకుంటూ ఉండేది. ఒకరోజు, అది ఒక పెద్ద పులిని చూసింది. కుందేలు చాలా భయపడి, పారిపోవడానికి ప్రయత్నించింది. కానీ, పులి దానిని వెంబడించింది. కుందేలు ఒక చెట్టు వెనుక దాక్కుంది. పులి దానిని వెతుకుతూ ఉంది. అప్పుడు, కుందేలు ఒక ఉపాయం చేసింది. అది చెట్టు పైకి ఎక్కి, పులికి కనిపించకుండా దాక్కుంది. పులి కుందేలు దొరకలేదని, అలిసిపోయి వెళ్ళిపోయింది. కుందేలు ధైర్యంగా బయటకు వచ్చి, తన స్నేహితులతో కలిసి ఆడుకుంది.
     నీతి: కష్ట సమయంలో ధైర్యంగా ఉండాలి.
     ```
-
+    ![output for TEXT input](text.png)
 ---
 
 ## 📁 Project Structure
