@@ -16,7 +16,7 @@ if not os.path.exists("static"):
     os.makedirs("static")
 
 #API
-API_KEY = "AIzaSyD2KFhzkVQMT17rYWSOd-q8fWVTeNe-p9I" 
+API_KEY = "  " 
 if not API_KEY:
     pass
 
