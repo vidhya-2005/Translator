@@ -28,7 +28,7 @@ A full video demonstration of the application's features is available on my Link
 To run this project, you will need the following:
 
 #### System Requirements:
-* **Python 3.7 or newer.**
+* **Python 3.10.**
 * **FFmpeg:** A free command-line tool for handling audio and video.
 
 #### Python Libraries:
