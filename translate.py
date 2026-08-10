@@ -18,9 +18,9 @@ if not os.path.exists("static"):
 #API
 API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
-    pass
+    raise RuntimeError("GEMINI_API_KEY environment variable is not set")
 
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}"
 
 #HTML,CSS,JavaScript (Frontend)
 HTML_TEMPLATE = """
