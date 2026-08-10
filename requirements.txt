@@ -1,4 +1,3 @@
-pyaudioop
 Flask
 gunicorn
 requests
