@@ -16,7 +16,7 @@ if not os.path.exists("static"):
     os.makedirs("static")
 
 #API
-API_KEY = "  " 
+API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
     pass
 
