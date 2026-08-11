@@ -4,12 +4,6 @@ requests==2.32.3
 googletrans==4.0.0-rc1
 pydub==0.25.1
 yt-dlp>=2026.2.4
-Flask
-gunicorn
-requests
-googletrans==4.0.2
-pydub
-yt-dlp
 anyio==4.12.1
 argon2-cffi==25.1.0
 argon2-cffi-bindings==25.1.0
