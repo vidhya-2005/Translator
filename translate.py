@@ -108,10 +108,10 @@ HTML_TEMPLATE = """
                         <div>
                             <label for="file-upload" class="bg-slate-50 hover:bg-slate-100 border-2 border-dashed border-slate-300 rounded-lg p-4 text-center cursor-pointer h-full flex flex-col justify-center items-center">
                                 <i class="fas fa-file-audio text-3xl text-slate-400"></i>
-                                <span class="mt-2 block text-sm font-medium text-slate-600">Upload File</span>
+                                <span class="mt-2 block text-sm font-medium text-slate-600">Upload File (audio/video/.txt)</span>
                                 <span id="file-name" class="text-xs text-slate-500"></span>
                             </label>
-                            <input id="file-upload" type="file" class="hidden" accept="audio/*,video/*">
+                            <input id="file-upload" type="file" class="hidden" accept="audio/*,video/*,.txt">
                         </div>
                         <div>
                              <label for="youtube-link" class="block text-sm font-medium text-slate-600 mb-1">YouTube</label>
@@ -280,11 +280,29 @@ HTML_TEMPLATE = """
                     showError('File size exceeds 50MB limit.');
                     return;
                 }
-                processFile(file);
+                if (file.name.toLowerCase().endsWith('.txt') || file.type === 'text/plain') {
+                    processTextFile(file);
+                } else {
+                    processFile(file);
+                }
             } else {
                 showError('Please provide an input: text, a file, or a YouTube link.');
             }
         });
+
+        function processTextFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const content = e.target.result.trim();
+                if (!content) {
+                    showError('The uploaded text file is empty.');
+                    return;
+                }
+                processText(content);
+            };
+            reader.onerror = () => showError('Could not read the text file.');
+            reader.readAsText(file);
+        }
 
         recordBtn.addEventListener('click', async () => {
             if (!isRecording) {
@@ -421,14 +439,52 @@ HTML_TEMPLATE = """
             }
         }
         
-        playAudioBtn.addEventListener('click', () => {
+        // Map bare language codes to a BCP-47 locale speechSynthesis voices actually match against
+        const LOCALE_MAP = {
+            en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT',
+            pt: 'pt-PT', ru: 'ru-RU', ja: 'ja-JP', ko: 'ko-KR', zh: 'zh-CN',
+            'zh-cn': 'zh-CN', 'zh-tw': 'zh-TW', ar: 'ar-SA', hi: 'hi-IN',
+            bn: 'bn-BD', nl: 'nl-NL', sv: 'sv-SE', pl: 'pl-PL', tr: 'tr-TR',
+            vi: 'vi-VN', th: 'th-TH', id: 'id-ID', uk: 'uk-UA', el: 'el-GR',
+            he: 'he-IL', ta: 'ta-IN', te: 'te-IN', ur: 'ur-PK', fa: 'fa-IR'
+        };
+
+        function getVoicesAsync() {
+            return new Promise((resolve) => {
+                let voices = window.speechSynthesis.getVoices();
+                if (voices.length) return resolve(voices);
+                window.speechSynthesis.onvoiceschanged = () => {
+                    resolve(window.speechSynthesis.getVoices());
+                };
+                // Fallback in case onvoiceschanged never fires
+                setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1000);
+            });
+        }
+
+        playAudioBtn.addEventListener('click', async () => {
             const textToSpeak = translation.value;
-            if (textToSpeak && 'speechSynthesis' in window) {
-                window.speechSynthesis.cancel();
-                const utterance = new SpeechSynthesisUtterance(textToSpeak);
-                utterance.lang = targetLang;
-                window.speechSynthesis.speak(utterance);
+            if (!textToSpeak) return;
+            if (!('speechSynthesis' in window)) {
+                showError('Speech playback is not supported in this browser.');
+                return;
             }
+
+            const locale = LOCALE_MAP[targetLang] || targetLang;
+            const voices = await getVoicesAsync();
+            const matchedVoice = voices.find(v => v.lang === locale)
+                || voices.find(v => v.lang.startsWith(targetLang));
+
+            if (!matchedVoice) {
+                showError(`No speech voice available for ${targetLangText.textContent} in this browser.`);
+                return;
+            }
+
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(textToSpeak);
+            utterance.voice = matchedVoice;
+            utterance.lang = matchedVoice.lang;
+            utterance.onerror = () => showError('Playback failed. Try again.');
+            window.speechSynthesis.speak(utterance);
         });
         
         copyBtn.addEventListener('click', () => {
@@ -603,6 +659,9 @@ def translate_youtube():
             }],
             'outtmpl': os.path.join("static", f"{unique_filename}"),
             'quiet': True,
+            'extractor_args': {
+                'youtube': {'player_client': ['android']}
+            },
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
