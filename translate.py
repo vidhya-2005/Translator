@@ -244,6 +244,7 @@ HTML_TEMPLATE = """
             if (!targetLangBtn.contains(e.target) && !targetLangDropdown.contains(e.target)) targetLangDropdown.classList.add('hidden');
         });
 
+        // Clear file upload selection when pasting a YouTube link
         youtubeLinkInput.addEventListener('input', () => {
             if (youtubeLinkInput.value.trim()) {
                 fileUpload.value = ''; 
@@ -252,6 +253,7 @@ HTML_TEMPLATE = """
             }
         });
 
+        // Clear file upload selection when typing text
         textInput.addEventListener('input', () => {
             if (textInput.value.trim()) {
                 fileUpload.value = '';
@@ -562,159 +564,4 @@ def translate_plain_text(text_to_translate, source_language, target_language_nam
         raise ValueError("The API response did not contain any candidates.")
 
     response_text = result['candidates'][0]['content']['parts'][0]['text']
-    clean_json_str = response_text.strip().replace('```json', '').replace('```', '').strip()
-    return json.loads(clean_json_str)
-
-def extract_text_from_pdf(path):
-    reader = PdfReader(path)
-    pages_text = [page.extract_text() or "" for page in reader.pages]
-    return "\n".join(pages_text).strip()
-
-def extract_text_from_docx(path):
-    doc = Document(path)
-    paragraphs = [p.text for p in doc.paragraphs]
-    return "\n".join(paragraphs).strip()
-
-@app.route('/')
-def index():
-    cleanup_stale_files()
-    return render_template_string(HTML_TEMPLATE, languages=LANGUAGES)
-
-@app.route('/translate', methods=['POST'])
-def translate_file():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part in the request'}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-
-    target_language_name = request.form.get('target_language_name', 'English')
-    source_language = request.form.get('source_language', 'auto')
-
-    filename_lower = file.filename.lower()
-    unique_filename = str(uuid.uuid4())
-    temp_path = os.path.join("static", f"{unique_filename}_{file.filename}")
-    file.save(temp_path)
-
-    try:
-        if filename_lower.endswith('.pdf'):
-            extracted_text = extract_text_from_pdf(temp_path)
-            if not extracted_text:
-                return jsonify({'error': 'Could not extract any text from this PDF. It may be a scanned/image-only document.'}), 400
-            result = translate_plain_text(extracted_text, source_language, target_language_name)
-            return jsonify(result)
-
-        elif filename_lower.endswith('.docx'):
-            extracted_text = extract_text_from_docx(temp_path)
-            if not extracted_text:
-                return jsonify({'error': 'Could not extract any text from this DOCX file. It may be empty.'}), 400
-            result = translate_plain_text(extracted_text, source_language, target_language_name)
-            return jsonify(result)
-
-        else:
-            audio_wav_path = os.path.join("static", f"{unique_filename}.wav")
-            audio = AudioSegment.from_file(temp_path)
-            audio.export(audio_wav_path, format="wav")
-
-            result = process_audio_with_gemini(
-                audio_wav_path, target_language_name, source_language
-            )
-
-            if os.path.exists(audio_wav_path):
-                os.remove(audio_wav_path)
-
-            return jsonify(result)
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-@app.route('/translate-text', methods=['POST'])
-def translate_text_route():
-    data = request.get_json() or {}
-    text = data.get('text', '').strip()
-    source_language = data.get('source_language', 'auto')
-    target_language_name = data.get('target_language_name', 'English')
-
-    if not text:
-        return jsonify({'error': 'No text provided'}), 400
-
-    try:
-        result = translate_plain_text(text, source_language, target_language_name)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/translate-youtube', methods=['POST'])
-def translate_youtube():
-    data = request.get_json() or {}
-    url = data.get('url', '').strip()
-    source_language = data.get('source_language', 'auto')
-    target_language_name = data.get('target_language_name', 'English')
-
-    if not url:
-        return jsonify({'error': 'No YouTube URL provided'}), 400
-
-    unique_id = str(uuid.uuid4())
-    temp_base = os.path.join("static", unique_id)
-
-    ydl_opts = {
-        'format': 'ba/b',
-        'outtmpl': temp_base + '.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'wav',
-            'preferredquality': '192',
-        }],
-        'quiet': True,
-        'no_warnings': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios']
-            }
-        }
-    }
-
-    wav_path = f"{temp_base}.wav"
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-
-        if not os.path.exists(wav_path):
-            return jsonify({'error': 'Failed to extract audio from YouTube URL.'}), 500
-
-        result = process_audio_with_gemini(wav_path, target_language_name, source_language)
-        return jsonify(result)
-
-    except Exception as e:
-        return jsonify({'error': f"YouTube processing failed: {str(e)}"}), 500
-    finally:
-        if os.path.exists(wav_path):
-            os.remove(wav_path)
-
-@app.route('/speak', methods=['POST'])
-def speak():
-    cleanup_stale_files()
-    data = request.get_json() or {}
-    text = data.get('text', '').strip()
-    lang = data.get('lang', 'en')
-
-    if not text:
-        return jsonify({'error': 'No text provided for speech synthesis'}), 400
-
-    try:
-        filename = f"tts_{uuid.uuid4()}.mp3"
-        filepath = os.path.join("static", filename)
-        
-        tts = gTTS(text=text, lang=lang)
-        tts.save(filepath)
-
-        return jsonify({'audio_url': f"/static/{filename}"})
-    except Exception as e:
-        return jsonify({'error': f"TTS generation failed: {str(e)}"}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    clean_json_str = response_text.strip().replace('```json', '').replace('
