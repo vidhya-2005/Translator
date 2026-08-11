@@ -2,20 +2,21 @@ import os
 import base64
 import requests
 import json
+import uuid
+import time
 from flask import Flask, render_template_string, request, jsonify
 from googletrans import LANGUAGES
 from pydub import AudioSegment
-import uuid
 import yt_dlp
+from pypdf import PdfReader
+from docx import Document
+from gtts import gTTS
 
-#Flask
 app = Flask(__name__)
 
-#store temporary audio files
 if not os.path.exists("static"):
     os.makedirs("static")
 
-# API
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if not API_KEY:
@@ -31,7 +32,18 @@ GEMINI_HEADERS = {
     "X-goog-api-key": API_KEY
 }
 
-#HTML,CSS,JavaScript (Frontend)
+def cleanup_stale_files(directory="static", age_seconds=3600):
+    """Deletes temporary files in the static folder older than the specified age."""
+    now = time.time()
+    for filename in os.listdir(directory):
+        filepath = os.path.join(directory, filename)
+        if os.path.isfile(filepath):
+            if now - os.path.getmtime(filepath) > age_seconds:
+                try:
+                    os.remove(filepath)
+                except OSError:
+                    pass
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -67,23 +79,15 @@ HTML_TEMPLATE = """
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-        .language-select-container {
-            position: relative;
-        }
-        .language-select-button {
-            @apply w-full bg-white border border-slate-300 rounded-lg p-3 text-left flex justify-between items-center;
-        }
+        .language-select-container { position: relative; }
+        .language-select-button { @apply w-full bg-white border border-slate-300 rounded-lg p-3 text-left flex justify-between items-center; }
         .language-dropdown {
             @apply absolute z-10 w-full bg-white border border-slate-200 rounded-lg mt-1 shadow-lg;
             max-height: 200px;
             overflow-y: auto;
         }
-        .language-dropdown input {
-            @apply w-full p-2 border-b border-slate-200 sticky top-0;
-        }
-        .language-dropdown div {
-            @apply p-2 hover:bg-indigo-50 cursor-pointer;
-        }
+        .language-dropdown input { @apply w-full p-2 border-b border-slate-200 sticky top-0; }
+        .language-dropdown div { @apply p-2 hover:bg-indigo-50 cursor-pointer; }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
@@ -94,31 +98,27 @@ HTML_TEMPLATE = """
         </header>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <!-- Input Section -->
             <div class="bg-white/60 p-6 rounded-xl shadow-inner-soft">
                 <h2 class="text-2xl font-semibold text-slate-700 mb-4 flex items-center"><i class="fas fa-sign-in-alt mr-3 text-indigo-500"></i>Input</h2>
                 <div class="space-y-4">
-                    <!-- Text Input -->
                     <div>
                          <label for="text-input" class="block text-sm font-medium text-slate-600 mb-1">Text</label>
                          <textarea id="text-input" rows="4" class="w-full p-3 bg-white border border-slate-300 rounded-lg" placeholder="Enter text to translate..."></textarea>
                     </div>
-                    <!-- File & Link Inputs -->
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label for="file-upload" class="bg-slate-50 hover:bg-slate-100 border-2 border-dashed border-slate-300 rounded-lg p-4 text-center cursor-pointer h-full flex flex-col justify-center items-center">
                                 <i class="fas fa-file-audio text-3xl text-slate-400"></i>
-                                <span class="mt-2 block text-sm font-medium text-slate-600">Upload File (audio/video/.txt)</span>
+                                <span class="mt-2 block text-sm font-medium text-slate-600">Upload File (audio/video/.txt/.pdf/.docx)</span>
                                 <span id="file-name" class="text-xs text-slate-500"></span>
                             </label>
-                            <input id="file-upload" type="file" class="hidden" accept="audio/*,video/*,.txt">
+                            <input id="file-upload" type="file" class="hidden" accept="audio/*,video/*,.txt,.pdf,.docx">
                         </div>
                         <div>
                              <label for="youtube-link" class="block text-sm font-medium text-slate-600 mb-1">YouTube</label>
                              <input type="text" id="youtube-link" class="w-full p-3 bg-white border border-slate-300 rounded-lg" placeholder="Paste YouTube link...">
                         </div>
                     </div>
-                     <!-- Action Buttons -->
                     <div class="flex items-center gap-4">
                         <button id="translate-btn" class="btn btn-primary flex-grow"><i class="fas fa-language mr-2"></i>Translate</button>
                         <button id="record-btn" class="btn btn-secondary !p-3 !rounded-full" title="Record Audio"><i class="fas fa-microphone"></i></button>
@@ -127,11 +127,9 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- Output Section -->
             <div class="bg-white/60 p-6 rounded-xl shadow-inner-soft">
                 <h2 class="text-2xl font-semibold text-slate-700 mb-4 flex items-center"><i class="fas fa-sign-out-alt mr-3 text-indigo-500"></i>Output</h2>
                 <div class="space-y-4">
-                    <!-- Language Selectors -->
                     <div class="grid grid-cols-2 gap-4">
                         <div class="language-select-container">
                             <label class="block text-sm font-medium text-slate-600 mb-1">From</label>
@@ -153,7 +151,6 @@ HTML_TEMPLATE = """
                             </div>
                         </div>
                     </div>
-                    <!-- Results -->
                     <div>
                         <label for="transcription" class="block text-sm font-medium text-slate-600 mb-1">Transcription</label>
                         <textarea id="transcription" rows="3" class="w-full p-3 bg-slate-100 border border-slate-200 rounded-lg" readonly></textarea>
@@ -164,6 +161,7 @@ HTML_TEMPLATE = """
                         <button id="copy-btn" class="absolute top-8 right-2 text-slate-400 hover:text-indigo-500" title="Copy to clipboard"><i class="fas fa-copy"></i></button>
                     </div>
                     <button id="play-audio-btn" class="btn btn-primary w-full" disabled><i class="fas fa-play mr-2"></i>Play Translation</button>
+                    <audio id="tts-audio" style="display:none;"></audio>
                 </div>
             </div>
         </div>
@@ -174,7 +172,6 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        // DOM Elements
         const textInput = document.getElementById('text-input');
         const fileUpload = document.getElementById('file-upload');
         const fileNameDisplay = document.getElementById('file-name');
@@ -196,6 +193,7 @@ HTML_TEMPLATE = """
         const translation = document.getElementById('translation');
         const copyBtn = document.getElementById('copy-btn');
         const playAudioBtn = document.getElementById('play-audio-btn');
+        const ttsAudio = document.getElementById('tts-audio');
         const loaderContainer = document.getElementById('loader-container');
         const errorMessage = document.getElementById('error-message');
 
@@ -207,7 +205,6 @@ HTML_TEMPLATE = """
 
         const languages = {{ languages | tojson }};
         
-        // Populate language dropdowns
         Object.entries(languages).forEach(([code, name]) => {
             const capitalizedName = name.charAt(0).toUpperCase() + name.slice(1);
             const sourceDiv = document.createElement('div');
@@ -221,12 +218,8 @@ HTML_TEMPLATE = """
             targetLangDropdown.appendChild(targetDiv);
         });
 
-        // Language Dropdown Logic
         function setupDropdown(btn, dropdown, searchInput, langVarSetter, textElement) {
-            btn.addEventListener('click', () => {
-                dropdown.classList.toggle('hidden');
-            });
-
+            btn.addEventListener('click', () => dropdown.classList.toggle('hidden'));
             searchInput.addEventListener('keyup', () => {
                 const filter = searchInput.value.toLowerCase();
                 dropdown.querySelectorAll('div').forEach(div => {
@@ -234,7 +227,6 @@ HTML_TEMPLATE = """
                     div.style.display = txtValue.toLowerCase().includes(filter) ? '' : 'none';
                 });
             });
-
             dropdown.addEventListener('click', (e) => {
                 if (e.target.tagName === 'DIV') {
                     langVarSetter(e.target.dataset.value);
@@ -248,15 +240,26 @@ HTML_TEMPLATE = """
         setupDropdown(targetLangBtn, targetLangDropdown, targetSearch, (val) => targetLang = val, targetLangText);
         
         document.addEventListener('click', (e) => {
-            if (!sourceLangBtn.contains(e.target) && !sourceLangDropdown.contains(e.target)) {
-                sourceLangDropdown.classList.add('hidden');
-            }
-            if (!targetLangBtn.contains(e.target) && !targetLangDropdown.contains(e.target)) {
-                targetLangDropdown.classList.add('hidden');
+            if (!sourceLangBtn.contains(e.target) && !sourceLangDropdown.contains(e.target)) sourceLangDropdown.classList.add('hidden');
+            if (!targetLangBtn.contains(e.target) && !targetLangDropdown.contains(e.target)) targetLangDropdown.classList.add('hidden');
+        });
+
+        youtubeLinkInput.addEventListener('input', () => {
+            if (youtubeLinkInput.value.trim()) {
+                fileUpload.value = ''; 
+                fileNameDisplay.textContent = '';
+                textInput.value = '';
             }
         });
 
-        // Input handling
+        textInput.addEventListener('input', () => {
+            if (textInput.value.trim()) {
+                fileUpload.value = '';
+                fileNameDisplay.textContent = '';
+                youtubeLinkInput.value = '';
+            }
+        });
+
         fileUpload.addEventListener('change', () => {
             const file = fileUpload.files[0];
             if (file) {
@@ -276,10 +279,7 @@ HTML_TEMPLATE = """
             } else if (url) {
                 processYouTubeLink(url);
             } else if (file) {
-                if (file.size > 50 * 1024 * 1024) {
-                    showError('File size exceeds 50MB limit.');
-                    return;
-                }
+                if (file.size > 50 * 1024 * 1024) return showError('File size exceeds 50MB limit.');
                 if (file.name.toLowerCase().endsWith('.txt') || file.type === 'text/plain') {
                     processTextFile(file);
                 } else {
@@ -294,10 +294,7 @@ HTML_TEMPLATE = """
             const reader = new FileReader();
             reader.onload = (e) => {
                 const content = e.target.result.trim();
-                if (!content) {
-                    showError('The uploaded text file is empty.');
-                    return;
-                }
+                if (!content) return showError('The uploaded text file is empty.');
                 processText(content);
             };
             reader.onerror = () => showError('Could not read the text file.');
@@ -335,111 +332,53 @@ HTML_TEMPLATE = """
         });
         
         async function processText(text) {
-            showLoader(true);
-            hideError();
-            resetOutput();
+            showLoader(true); hideError(); resetOutput();
             try {
                 const response = await fetch('/translate-text', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        text: text,
-                        source_language: sourceLang,
-                        target_language: targetLang,
-                        target_language_name: targetLangText.textContent
-                    }),
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text, source_language: sourceLang, target_language: targetLang, target_language_name: targetLangText.textContent }),
                 });
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-                }
-                const data = await response.json();
-                updateUIWithResults(data, true);
-            } catch (error) {
-                console.error('Error:', error);
-                showError(error.message);
-            } finally {
-                showLoader(false);
-            }
+                if (!response.ok) throw new Error((await response.json()).error || `HTTP error! status: ${response.status}`);
+                updateUIWithResults(await response.json(), true);
+            } catch (error) { showError(error.message); } finally { showLoader(false); }
         }
 
         async function processYouTubeLink(url) {
-            showLoader(true);
-            hideError();
-            resetOutput();
+            showLoader(true); hideError(); resetOutput();
             try {
                 const response = await fetch('/translate-youtube', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        url: url,
-                        source_language: sourceLang,
-                        target_language: targetLang,
-                        target_language_name: targetLangText.textContent
-                    }),
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url, source_language: sourceLang, target_language: targetLang, target_language_name: targetLangText.textContent }),
                 });
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-                }
-                const data = await response.json();
-                updateUIWithResults(data);
-            } catch (error) {
-                console.error('Error:', error);
-                showError(error.message);
-            } finally {
-                showLoader(false);
-            }
+                if (!response.ok) throw new Error((await response.json()).error || `HTTP error! status: ${response.status}`);
+                updateUIWithResults(await response.json());
+            } catch (error) { showError(error.message); } finally { showLoader(false); }
         }
 
         async function processFile(file, filename = 'uploaded_file') {
-            showLoader(true);
-            hideError();
-            resetOutput();
+            showLoader(true); hideError(); resetOutput();
             const formData = new FormData();
             formData.append('file', file, filename);
             formData.append('source_language', sourceLang);
             formData.append('target_language', targetLang);
             formData.append('target_language_name', targetLangText.textContent);
             try {
-                const response = await fetch('/translate', {
-                    method: 'POST',
-                    body: formData,
-                });
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-                }
-                const data = await response.json();
-                updateUIWithResults(data);
-            } catch (error) {
-                console.error('Error:', error);
-                showError(error.message);
-            } finally {
-                showLoader(false);
-            }
+                const response = await fetch('/translate', { method: 'POST', body: formData });
+                if (!response.ok) throw new Error((await response.json()).error || `HTTP error! status: ${response.status}`);
+                updateUIWithResults(await response.json());
+            } catch (error) { showError(error.message); } finally { showLoader(false); }
         }
         
         function updateUIWithResults(data, isText=false) {
-            if (isText) {
-                transcription.value = data.transcription; // Original text for text translation
-            } else {
-                transcription.value = data.transcription;
-            }
-            
-            if (sourceLang === 'auto') {
-                sourceLangText.textContent = data.detected_language_name;
-            }
-            
+            transcription.value = data.transcription;
+            if (sourceLang === 'auto') sourceLangText.textContent = data.detected_language_name;
             translation.value = data.translation;
-            
             if (data.translation) {
                 playAudioBtn.disabled = false;
                 copyBtn.style.display = 'block';
             }
         }
         
-        // Map bare language codes to a BCP-47 locale speechSynthesis voices actually match against
         const LOCALE_MAP = {
             en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT',
             pt: 'pt-PT', ru: 'ru-RU', ja: 'ja-JP', ko: 'ko-KR', zh: 'zh-CN',
@@ -453,10 +392,7 @@ HTML_TEMPLATE = """
             return new Promise((resolve) => {
                 let voices = window.speechSynthesis.getVoices();
                 if (voices.length) return resolve(voices);
-                window.speechSynthesis.onvoiceschanged = () => {
-                    resolve(window.speechSynthesis.getVoices());
-                };
-                // Fallback in case onvoiceschanged never fires
+                window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
                 setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1000);
             });
         }
@@ -464,27 +400,40 @@ HTML_TEMPLATE = """
         playAudioBtn.addEventListener('click', async () => {
             const textToSpeak = translation.value;
             if (!textToSpeak) return;
-            if (!('speechSynthesis' in window)) {
-                showError('Speech playback is not supported in this browser.');
-                return;
+
+            playAudioBtn.disabled = true;
+            const originalLabel = playAudioBtn.innerHTML;
+
+            try {
+                let matchedVoice = null;
+                if ('speechSynthesis' in window) {
+                    const locale = LOCALE_MAP[targetLang] || targetLang;
+                    const voices = await getVoicesAsync();
+                    matchedVoice = voices.find(v => v.lang === locale) || voices.find(v => v.lang.startsWith(targetLang));
+                }
+
+                if (matchedVoice) {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+                    utterance.voice = matchedVoice;
+                    utterance.lang = matchedVoice.lang;
+                    utterance.onerror = () => showError('Playback failed. Try again.');
+                    window.speechSynthesis.speak(utterance);
+                } else {
+                    playAudioBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Loading audio...';
+                    const response = await fetch('/speak', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: textToSpeak, lang: targetLang })
+                    });
+                    const data = await response.json();
+                    if (!response.ok || data.error) throw new Error(data.error || 'Could not generate audio for this language.');
+                    ttsAudio.src = data.audio_url;
+                    ttsAudio.play();
+                }
+            } catch (err) { showError(err.message); } finally {
+                playAudioBtn.innerHTML = originalLabel;
+                playAudioBtn.disabled = false;
             }
-
-            const locale = LOCALE_MAP[targetLang] || targetLang;
-            const voices = await getVoicesAsync();
-            const matchedVoice = voices.find(v => v.lang === locale)
-                || voices.find(v => v.lang.startsWith(targetLang));
-
-            if (!matchedVoice) {
-                showError(`No speech voice available for ${targetLangText.textContent} in this browser.`);
-                return;
-            }
-
-            window.speechSynthesis.cancel();
-            const utterance = new SpeechSynthesisUtterance(textToSpeak);
-            utterance.voice = matchedVoice;
-            utterance.lang = matchedVoice.lang;
-            utterance.onerror = () => showError('Playback failed. Try again.');
-            window.speechSynthesis.speak(utterance);
         });
         
         copyBtn.addEventListener('click', () => {
@@ -512,10 +461,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- Python Backend Logic ---
-
 def handle_api_error(response):
-    """Parses API errors for better user feedback."""
     try:
         error_data = response.json()
         message = error_data.get("error", {}).get("message", "Unknown API error.")
@@ -526,15 +472,10 @@ def handle_api_error(response):
         return response.text
 
 def process_audio_with_gemini(audio_path, target_language_name, source_language_code='auto'):
-    """
-    A helper function to transcribe, detect language, and translate an audio file.
-    """
     with open(audio_path, "rb") as audio_file:
         audio_bytes = audio_file.read()
-    
     encoded_audio = base64.b64encode(audio_bytes).decode("utf-8")
 
-    #Transcription and Language Detection
     if source_language_code == 'auto':
         prompt = "Transcribe this audio and identify its language. ONLY return a valid JSON object with two keys: 'language_code' (e.g., 'en', 'fr') and 'transcription'. Do not include any other text or formatting."
     else:
@@ -550,8 +491,7 @@ def process_audio_with_gemini(audio_path, target_language_name, source_language_
     response = requests.post(GEMINI_API_URL, json=payload, headers=GEMINI_HEADERS)
     
     if response.status_code != 200:
-        error_message = handle_api_error(response)
-        raise ValueError(f"API Error: {error_message}")
+        raise ValueError(f"API Error: {handle_api_error(response)}")
 
     result = response.json()
     if not result.get('candidates'):
@@ -569,7 +509,6 @@ def process_audio_with_gemini(audio_path, target_language_name, source_language_
     transcribed_text = transcription_data.get('transcription', '')
     detected_language_name = LANGUAGES.get(detected_lang_code, "Unknown").capitalize()
 
-    #Translation
     if not transcribed_text:
         return {
             'detected_language_name': detected_language_name,
@@ -586,8 +525,7 @@ def process_audio_with_gemini(audio_path, target_language_name, source_language_
     response = requests.post(GEMINI_API_URL, json=payload, headers=GEMINI_HEADERS)
     
     if response.status_code != 200:
-        error_message = handle_api_error(response)
-        raise ValueError(f"API Error during translation: {error_message}")
+        raise ValueError(f"API Error during translation: {handle_api_error(response)}")
     
     result = response.json()
     translated_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -599,14 +537,51 @@ def process_audio_with_gemini(audio_path, target_language_name, source_language_
         'translation': translated_text,
     }
 
+def translate_plain_text(text_to_translate, source_language, target_language_name):
+    if source_language == 'auto':
+        prompt = f"First, identify the language of the following text. Then, translate the text to {target_language_name}. ONLY return a valid JSON object with three keys: 'detected_language_name', 'transcription' (which should be the original, untranslated text), and 'translation'."
+    else:
+        source_language_name = LANGUAGES.get(source_language, "the provided language")
+        prompt = f"The following text is in {source_language_name}. Translate it to {target_language_name}. ONLY return a valid JSON object with three keys: 'detected_language_name' (which should be '{source_language_name}'), 'transcription' (the original text), and 'translation'."
+
+    payload = {
+        "contents": [{"parts": [
+            {"text": prompt},
+            {"text": text_to_translate}
+        ]}]
+    }
+
+    response = requests.post(GEMINI_API_URL, json=payload, headers=GEMINI_HEADERS)
+
+    if response.status_code != 200:
+        raise ValueError(f"API Error: {handle_api_error(response)}")
+
+    result = response.json()
+
+    if not result.get('candidates'):
+        raise ValueError("The API response did not contain any candidates.")
+
+    response_text = result['candidates'][0]['content']['parts'][0]['text']
+    clean_json_str = response_text.strip().replace('```json', '').replace('```', '').strip()
+    return json.loads(clean_json_str)
+
+def extract_text_from_pdf(path):
+    reader = PdfReader(path)
+    pages_text = [page.extract_text() or "" for page in reader.pages]
+    return "\n".join(pages_text).strip()
+
+def extract_text_from_docx(path):
+    doc = Document(path)
+    paragraphs = [p.text for p in doc.paragraphs]
+    return "\n".join(paragraphs).strip()
+
 @app.route('/')
 def index():
-    """ Renders the main page with the UI. """
+    cleanup_stale_files()
     return render_template_string(HTML_TEMPLATE, languages=LANGUAGES)
 
 @app.route('/translate', methods=['POST'])
 def translate_file():
-    """ Handles uploaded audio/video file processing. """
     if 'file' not in request.files:
         return jsonify({'error': 'No file part in the request'}), 400
     file = request.files['file']
@@ -615,117 +590,131 @@ def translate_file():
 
     target_language_name = request.form.get('target_language_name', 'English')
     source_language = request.form.get('source_language', 'auto')
-    
+
+    filename_lower = file.filename.lower()
     unique_filename = str(uuid.uuid4())
     temp_path = os.path.join("static", f"{unique_filename}_{file.filename}")
-    wav_path = os.path.join("static", f"{unique_filename}.wav")
     file.save(temp_path)
 
     try:
-        sound = AudioSegment.from_file(temp_path)
-        sound.export(wav_path, format="wav")
-        
-        result = process_audio_with_gemini(wav_path, target_language_name, source_language)
-        return jsonify(result)
-        
+        if filename_lower.endswith('.pdf'):
+            extracted_text = extract_text_from_pdf(temp_path)
+            if not extracted_text:
+                return jsonify({'error': 'Could not extract any text from this PDF. It may be a scanned/image-only document.'}), 400
+            result = translate_plain_text(extracted_text, source_language, target_language_name)
+            return jsonify(result)
+
+        elif filename_lower.endswith('.docx'):
+            extracted_text = extract_text_from_docx(temp_path)
+            if not extracted_text:
+                return jsonify({'error': 'Could not extract any text from this DOCX file. It may be empty.'}), 400
+            result = translate_plain_text(extracted_text, source_language, target_language_name)
+            return jsonify(result)
+
+        else:
+            audio_wav_path = os.path.join("static", f"{unique_filename}.wav")
+            audio = AudioSegment.from_file(temp_path)
+            audio.export(audio_wav_path, format="wav")
+
+            result = process_audio_with_gemini(
+                audio_wav_path, target_language_name, source_language
+            )
+
+            if os.path.exists(audio_wav_path):
+                os.remove(audio_wav_path)
+
+            return jsonify(result)
+
     except Exception as e:
-        print(f"Error during file processing: {e}")
-        return jsonify({'error': f'{str(e)}'}), 500
+        return jsonify({'error': str(e)}), 500
     finally:
-        if os.path.exists(temp_path): os.remove(temp_path)
-        if os.path.exists(wav_path): os.remove(wav_path)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+@app.route('/translate-text', methods=['POST'])
+def translate_text_route():
+    data = request.get_json() or {}
+    text = data.get('text', '').strip()
+    source_language = data.get('source_language', 'auto')
+    target_language_name = data.get('target_language_name', 'English')
+
+    if not text:
+        return jsonify({'error': 'No text provided'}), 400
+
+    try:
+        result = translate_plain_text(text, source_language, target_language_name)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/translate-youtube', methods=['POST'])
 def translate_youtube():
-    """ Handles YouTube link processing. """
-    data = request.get_json()
-    url = data.get('url')
-    target_language_name = data.get('target_language_name', 'English')
+    data = request.get_json() or {}
+    url = data.get('url', '').strip()
     source_language = data.get('source_language', 'auto')
+    target_language_name = data.get('target_language_name', 'English')
 
     if not url:
         return jsonify({'error': 'No YouTube URL provided'}), 400
 
-    unique_filename = str(uuid.uuid4())
-    temp_path = os.path.join("static", f"{unique_filename}.wav")
-    
-    try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'wav',
-                'preferredquality': '192',
-            }],
-            'outtmpl': os.path.join("static", f"{unique_filename}"),
-            'quiet': True,
-            'extractor_args': {
-                'youtube': {'player_client': ['android']}
-            },
+    unique_id = str(uuid.uuid4())
+    temp_base = os.path.join("static", unique_id)
+
+    ydl_opts = {
+        'format': 'ba/b',
+        'outtmpl': temp_base + '.%(ext)s',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'wav',
+            'preferredquality': '192',
+        }],
+        'quiet': True,
+        'no_warnings': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios']
+            }
         }
+    }
+
+    wav_path = f"{temp_base}.wav"
+
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        result = process_audio_with_gemini(temp_path, target_language_name, source_language)
+        if not os.path.exists(wav_path):
+            return jsonify({'error': 'Failed to extract audio from YouTube URL.'}), 500
+
+        result = process_audio_with_gemini(wav_path, target_language_name, source_language)
         return jsonify(result)
 
-    except yt_dlp.utils.DownloadError as e:
-        print(f"YouTube download error: {e}")
-        return jsonify({'error': 'Failed to download audio from YouTube link. The video may be private or unavailable.'}), 500
     except Exception as e:
-        print(f"Error during YouTube processing: {e}")
-        return jsonify({'error': f'{str(e)}'}), 500
+        return jsonify({'error': f"YouTube processing failed: {str(e)}"}), 500
     finally:
-        if os.path.exists(temp_path): os.remove(temp_path)
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
 
-@app.route('/translate-text', methods=['POST'])
-def translate_text():
-    """ Handles direct text translation. """
-    data = request.get_json()
-    text_to_translate = data.get('text')
-    source_language = data.get('source_language', 'auto')
-    target_language_name = data.get('target_language_name', 'English')
+@app.route('/speak', methods=['POST'])
+def speak():
+    cleanup_stale_files()
+    data = request.get_json() or {}
+    text = data.get('text', '').strip()
+    lang = data.get('lang', 'en')
 
-    if not text_to_translate:
-        return jsonify({'error': 'No text provided for translation'}), 400
+    if not text:
+        return jsonify({'error': 'No text provided for speech synthesis'}), 400
 
     try:
+        filename = f"tts_{uuid.uuid4()}.mp3"
+        filepath = os.path.join("static", filename)
         
-        #Detect language
-        if source_language == 'auto':
-            prompt = f"First, identify the language of the following text. Then, translate the text to {target_language_name}. ONLY return a valid JSON object with three keys: 'detected_language_name', 'transcription' (which should be the original, untranslated text), and 'translation'."
-        else:
-            source_language_name = LANGUAGES.get(source_language, "the provided language")
-            prompt = f"The following text is in {source_language_name}. Translate it to {target_language_name}. ONLY return a valid JSON object with three keys: 'detected_language_name' (which should be '{source_language_name}'), 'transcription' (the original text), and 'translation'."
+        tts = gTTS(text=text, lang=lang)
+        tts.save(filepath)
 
-        payload = {
-            "contents": [{"parts": [
-                {"text": prompt},
-                {"text": text_to_translate}
-            ]}]
-        }
-
-        response = requests.post(GEMINI_API_URL, json=payload, headers=GEMINI_HEADERS)
-        
-        if response.status_code != 200:
-            error_message = handle_api_error(response)
-            raise ValueError(f"API Error: {error_message}")
-
-        result = response.json()
-        
-        if not result.get('candidates'):
-            raise ValueError("The API response did not contain any candidates.")
-        
-        response_text = result['candidates'][0]['content']['parts'][0]['text']
-        clean_json_str = response_text.strip().replace('```json', '').replace('```', '').strip()
-        translation_data = json.loads(clean_json_str)
-
-        return jsonify(translation_data)
-
+        return jsonify({'audio_url': f"/static/{filename}"})
     except Exception as e:
-        print(f"Error during text processing: {e}")
-        return jsonify({'error': f'{str(e)}'}), 500
+        return jsonify({'error': f"TTS generation failed: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(debug=True, port=5000)
