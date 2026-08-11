@@ -491,11 +491,7 @@ def process_audio_with_gemini(audio_path, target_language_name, source_language_
             {"inlineData": {"mimeType": "audio/wav", "data": encoded_audio}}
         ]}]
     }
-    headers = {"Content-Type": "application/json"}
-    
-    gemini_url_with_key = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
-    
-    response = requests.post(gemini_url_with_key, json=payload, headers=headers)
+    response = requests.post(GEMINI_API_URL, json=payload, headers=GEMINI_HEADERS)
     
     if response.status_code != 200:
         error_message = handle_api_error(response)
@@ -531,7 +527,7 @@ def process_audio_with_gemini(audio_path, target_language_name, source_language_
             {"text": f"Translate the following text from {detected_language_name} to {target_language_name}: {transcribed_text}"}
         ]}]
     }
-    response = requests.post(gemini_url_with_key, json=payload, headers=headers)
+    response = requests.post(GEMINI_API_URL, json=payload, headers=GEMINI_HEADERS)
     
     if response.status_code != 200:
         error_message = handle_api_error(response)
@@ -636,9 +632,6 @@ def translate_text():
 
     try:
         
-        gemini_url_with_key = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
-        headers = {"Content-Type": "application/json"}
-        
         #Detect language
         if source_language == 'auto':
             prompt = f"First, identify the language of the following text. Then, translate the text to {target_language_name}. ONLY return a valid JSON object with three keys: 'detected_language_name', 'transcription' (which should be the original, untranslated text), and 'translation'."
@@ -653,7 +646,7 @@ def translate_text():
             ]}]
         }
 
-        response = requests.post(gemini_url_with_key, json=payload, headers=headers)
+        response = requests.post(GEMINI_API_URL, json=payload, headers=GEMINI_HEADERS)
         
         if response.status_code != 200:
             error_message = handle_api_error(response)
