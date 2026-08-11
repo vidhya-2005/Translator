@@ -564,4 +564,4 @@ def translate_plain_text(text_to_translate, source_language, target_language_nam
         raise ValueError("The API response did not contain any candidates.")
 
     response_text = result['candidates'][0]['content']['parts'][0]['text']
-    clean_json_str = response_text.strip().replace('```json', '').replace('
+    clean_json_str = response_text.strip().replace('```json', '').replace('```', '').strip()
