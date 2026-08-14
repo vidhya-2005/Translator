@@ -4,12 +4,14 @@ import requests
 from googletrans import LANGUAGES
 from flask import current_app
 
+
 def _url():
     key = current_app.config["API_KEY"]
     if not key:
         raise ValueError("GEMINI_API_KEY is not configured.")
     model = current_app.config["GEMINI_MODEL"]
     return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+
 
 def _call(payload):
     response = requests.post(
@@ -30,6 +32,7 @@ def _call(payload):
     except (KeyError, IndexError):
         raise ValueError("Gemini returned an unexpected response.")
 
+
 def _parse_json(text):
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -39,47 +42,53 @@ def _parse_json(text):
     except json.JSONDecodeError as exc:
         raise ValueError(f"Could not parse Gemini JSON response: {exc}")
 
-def translate_text(text, target_language_name, source_language="auto"):
-    if source_language == "auto":
-        prompt = (
-            f"Detect the language and translate the text to {target_language_name}. "
-            "Return ONLY JSON with keys: detected_language_name, transcription, translation."
-        )
-    else:
-        source_name = LANGUAGES.get(source_language, source_language)
-        prompt = (
-            f"The text is in {source_name}. Translate it to {target_language_name}. "
-            "Return ONLY JSON with keys: detected_language_name, transcription, translation."
-        )
 
+def _translation_prompt(target_language_name, source_language="auto"):
+    if source_language == "auto":
+        return (
+            f"Detect the source language and translate the supplied content to {target_language_name}. "
+            "Return ONLY JSON with keys: detected_language_name, transcription, translation."
+        )
+    source_name = LANGUAGES.get(source_language, source_language)
+    return (
+        f"The source language is {source_name}. Translate the supplied content to {target_language_name}. "
+        "Return ONLY JSON with keys: detected_language_name, transcription, translation."
+    )
+
+
+def translate_text(text, target_language_name, source_language="auto"):
     result = _parse_json(_call({
-        "contents": [{"parts": [{"text": prompt}, {"text": text}]}]
+        "contents": [{"parts": [{"text": _translation_prompt(target_language_name, source_language)}, {"text": text}]}]
     }))
     return result
+
+
+def translate_document(path, mime_type, target_language_name, source_language="auto"):
+    encoded = base64.b64encode(open(path, "rb").read()).decode("utf-8")
+    prompt = _translation_prompt(target_language_name, source_language)
+    result = _parse_json(_call({
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inlineData": {"mimeType": mime_type, "data": encoded}},
+            ]
+        }]
+    }))
+    return result
+
 
 def process_audio(audio_path, target_language_name, source_language="auto"):
     with open(audio_path, "rb") as audio:
         encoded = base64.b64encode(audio.read()).decode()
 
     if source_language == "auto":
-        prompt = (
-            "Transcribe this audio and identify its language. "
-            "Return ONLY JSON with keys: language_code and transcription."
-        )
+        prompt = "Transcribe this audio and identify its language. Return ONLY JSON with keys: language_code and transcription."
     else:
         source_name = LANGUAGES.get(source_language, source_language)
-        prompt = (
-            f"The audio is in {source_name}. Transcribe it. "
-            f"Return ONLY JSON with language_code='{source_language}' and transcription."
-        )
+        prompt = f"The audio is in {source_name}. Transcribe it. Return ONLY JSON with language_code='{source_language}' and transcription."
 
     result = _parse_json(_call({
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inlineData": {"mimeType": "audio/wav", "data": encoded}}
-            ]
-        }]
+        "contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "audio/wav", "data": encoded}}]}]
     }))
 
     code = result.get("language_code", "en")
@@ -87,27 +96,10 @@ def process_audio(audio_path, target_language_name, source_language="auto"):
     language_name = LANGUAGES.get(code, "Unknown").capitalize()
 
     if not transcription:
-        return {
-            "detected_language_name": language_name,
-            "detected_language_code": code,
-            "transcription": "(No speech detected)",
-            "translation": ""
-        }
+        return {"detected_language_name": language_name, "detected_language_code": code, "transcription": "(No speech detected)", "translation": ""}
 
     translated = _call({
-        "contents": [{
-            "parts": [{
-                "text": (
-                    f"Translate the following text from {language_name} "
-                    f"to {target_language_name}: {transcription}"
-                )
-            }]
-        }]
+        "contents": [{"parts": [{"text": f"Translate the following text from {language_name} to {target_language_name}: {transcription}"}]}]
     }).strip()
 
-    return {
-        "detected_language_name": language_name,
-        "detected_language_code": code,
-        "transcription": transcription,
-        "translation": translated
-    }
+    return {"detected_language_name": language_name, "detected_language_code": code, "transcription": transcription, "translation": translated}
