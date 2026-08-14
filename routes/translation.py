@@ -4,7 +4,7 @@ from flask import Blueprint, jsonify, request
 from services.gemini_service import translate_text, translate_document, process_audio
 from services.audio_service import convert_to_wav
 from services.youtube_service import download_youtube_audio
-from services.document_service import get_file_type, extract_docx_text, extract_pdf_text
+from services.document_service import get_file_type, extract_docx_text
 from utils.validation import validate_source_target
 
 translation_bp = Blueprint("translation", __name__)
@@ -51,8 +51,8 @@ def file_translation():
 
         token = str(uuid.uuid4())
         os.makedirs("tmp", exist_ok=True)
-        safe_name = f"{token}{extension or os.path.splitext(file.filename)[1].lower()}"
-        input_path = os.path.join("tmp", safe_name)
+        safe_extension = extension or os.path.splitext(file.filename)[1].lower()
+        input_path = os.path.join("tmp", f"{token}{safe_extension}")
         wav_path = os.path.join("tmp", f"{token}.wav")
         file.save(input_path)
 
@@ -68,7 +68,7 @@ def file_translation():
                 return jsonify(translate_text(text, target, source))
 
             if extension == ".doc":
-                return jsonify(error="Legacy .doc files are not supported. Please save the file as .docx and upload again.")), 400
+                return jsonify(error="Legacy .doc files are not supported. Please save the file as .docx and upload again."), 400
 
             return jsonify(translate_document(input_path, mime_type, target, source))
         finally:
