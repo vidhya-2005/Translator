@@ -5,7 +5,7 @@ from googletrans import LANGUAGES
 from flask import current_app
 
 def _url():
-    key = current_app.config["GEMINI_API_KEY"]
+    key = current_app.config["API_KEY"]
     if not key:
         raise ValueError("GEMINI_API_KEY is not configured.")
     model = current_app.config["GEMINI_MODEL"]
