@@ -1,9 +1,6 @@
 Flask
 requests
+googletrans==4.0.0rc1
 pydub
 yt-dlp
-pypdf
-python-docx
-googletrans==4.0.0-rc1
-gTTS
 gunicorn
