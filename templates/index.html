@@ -10,15 +10,21 @@
 <main class="container">
     <header>
         <h1>Universal Translator</h1>
-        <p>Translate text, speech, files and YouTube videos with AI.</p>
+        <p>Translate text, speech, images, documents and YouTube videos with AI.</p>
     </header>
 
     <section class="grid">
         <div class="card">
             <h2>Input</h2>
             <textarea id="text-input" rows="5" placeholder="Enter text to translate..."></textarea>
-            <input id="file-upload" type="file" accept="audio/*,video/*">
+
+            <label for="file-upload">Upload file</label>
+            <input id="file-upload" type="file"
+                   accept=".png,.jpg,.jpeg,.pdf,.docx,audio/*,video/*">
+            <small>Supported: PNG, JPG, PDF, DOCX, audio and video</small>
+
             <input id="youtube-link" type="url" placeholder="Paste YouTube link...">
+
             <div class="actions">
                 <button id="translate-btn">Translate</button>
                 <button id="record-btn">🎙 Record</button>
@@ -45,7 +51,7 @@
                     </select>
                 </label>
             </div>
-            <label>Transcription
+            <label>Transcription / Extracted Text
                 <textarea id="transcription" rows="4" readonly></textarea>
             </label>
             <label>Translation
