@@ -1,8 +1,17 @@
+import os
+
 from flask import Flask
 from config import Config
 
+
 def create_app():
-    app = Flask(__name__)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    app = Flask(
+        __name__,
+        template_folder=os.path.join(project_root, "templates"),
+        static_folder=os.path.join(project_root, "static"),
+    )
     app.config.from_object(Config)
 
     from routes.pages import pages_bp
