@@ -2,6 +2,7 @@ import os
 import re
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import GenericProxyConfig
 
 
 _VIDEO_ID_PATTERN = re.compile(
@@ -16,10 +17,37 @@ def extract_video_id(url):
     return match.group(1)
 
 
+def _proxy_urls():
+    http_proxy = os.environ.get("YOUTUBE_HTTP_PROXY")
+    https_proxy = os.environ.get("YOUTUBE_HTTPS_PROXY") or http_proxy
+    if not http_proxy and not https_proxy:
+        return None
+    return http_proxy, https_proxy or http_proxy
+
+
 def get_youtube_transcript(url, source_language="auto"):
     video_id = extract_video_id(url)
-    api = YouTubeTranscriptApi()
-    transcripts = api.list(video_id)
+    proxy_urls = _proxy_urls()
+
+    if proxy_urls:
+        http_url, https_url = proxy_urls
+        api = YouTubeTranscriptApi(
+            proxy_config=GenericProxyConfig(
+                http_url=http_url,
+                https_url=https_url,
+            )
+        )
+    else:
+        api = YouTubeTranscriptApi()
+
+    try:
+        transcripts = api.list(video_id)
+    except Exception as exc:
+        raise ValueError(
+            "YouTube transcript access is blocked from this server. "
+            "Configure YOUTUBE_HTTP_PROXY/YOUTUBE_HTTPS_PROXY with a rotating residential proxy, "
+            "or upload the audio/video file directly."
+        ) from exc
 
     selected = None
     if source_language != "auto":
@@ -29,13 +57,19 @@ def get_youtube_transcript(url, source_language="auto"):
             selected = None
 
     if selected is None:
-        # Prefer manually created captions, then auto-generated captions.
         try:
             selected = next(iter(transcripts))
         except StopIteration as exc:
             raise ValueError("No YouTube transcript or captions are available for this video.") from exc
 
-    fetched = selected.fetch()
+    try:
+        fetched = selected.fetch()
+    except Exception as exc:
+        raise ValueError(
+            "YouTube transcript access is blocked from this server. "
+            "Configure a rotating residential proxy or upload the audio/video file directly."
+        ) from exc
+
     text = " ".join(snippet.text.strip() for snippet in fetched if snippet.text.strip()).strip()
     if not text:
         raise ValueError("The YouTube transcript is empty.")
@@ -51,6 +85,7 @@ def get_youtube_transcript(url, source_language="auto"):
 
 def download_youtube_audio(url, output_path):
     base = os.path.splitext(output_path)[0]
+    proxy_urls = _proxy_urls()
 
     options = {
         "format": "bestaudio/best",
@@ -67,6 +102,9 @@ def download_youtube_audio(url, output_path):
         }],
     }
 
+    if proxy_urls:
+        options["proxy"] = proxy_urls[1]
+
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([url])
@@ -74,7 +112,8 @@ def download_youtube_audio(url, output_path):
         message = str(exc)
         if "Sign in to confirm" in message or "Failed to extract any player response" in message:
             raise ValueError(
-                "YouTube audio extraction was blocked. This video may still work if captions are available."
+                "YouTube blocked server-side extraction. Configure a rotating residential proxy, "
+                "or upload the audio/video file directly."
             ) from exc
         raise ValueError(f"YouTube download failed: {message}") from exc
 
