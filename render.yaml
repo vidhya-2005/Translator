@@ -3,7 +3,7 @@ services:
     name: universal-translator
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn main:app
     healthCheckPath: /health
     envVars:
       - key: GEMINI_API_KEY
