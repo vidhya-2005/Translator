@@ -7,6 +7,7 @@ const translateBtn = document.getElementById("translate-btn");
 const recordBtn = document.getElementById("record-btn");
 const transcription = document.getElementById("transcription");
 const translation = document.getElementById("translation");
+const detectedLanguage = document.getElementById("detected-language");
 const copyBtn = document.getElementById("copy-btn");
 const playBtn = document.getElementById("play-btn");
 const loader = document.getElementById("loader");
@@ -18,7 +19,13 @@ let chunks = [];
 
 function showError(message) { errorMessage.textContent = message; }
 function setLoading(value) { loader.classList.toggle("hidden", !value); }
-function resetOutput() { transcription.value = ""; translation.value = ""; playBtn.disabled = true; showError(""); }
+function resetOutput() {
+    transcription.value = "";
+    translation.value = "";
+    detectedLanguage.textContent = "Detected language: —";
+    playBtn.disabled = true;
+    showError("");
+}
 
 function clearOtherInputs(active) {
     if (active !== "text") textInput.value = "";
@@ -39,6 +46,10 @@ youtubeInput.addEventListener("input", () => {
 });
 
 async function handleResponse(response) {
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+        throw new Error(`Server returned an unexpected response (${response.status}).`);
+    }
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Request failed.");
     return data;
@@ -47,6 +58,8 @@ async function handleResponse(response) {
 function showResult(data) {
     transcription.value = data.transcription || "";
     translation.value = data.translation || "";
+    const language = data.detected_language_name || data.detected_language_code || "—";
+    detectedLanguage.textContent = `Detected language: ${language}`;
     playBtn.disabled = !data.translation;
 }
 
