@@ -64,17 +64,91 @@ def translate_text(text, target_language_name, source_language="auto"):
 
 
 def translate_document(path, mime_type, target_language_name, source_language="auto"):
-    encoded = base64.b64encode(open(path, "rb").read()).decode("utf-8")
-    prompt = _translation_prompt(target_language_name, source_language)
+    with open(path, "rb") as file:
+        encoded = base64.b64encode(file.read()).decode("utf-8")
     result = _parse_json(_call({
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inlineData": {"mimeType": mime_type, "data": encoded}},
-            ]
-        }]
+        "contents": [{"parts": [{"text": _translation_prompt(target_language_name, source_language)}, {"inlineData": {"mimeType": mime_type, "data": encoded}}]}]
     }))
     return result
+
+
+def translate_youtube(url, target_language_name, source_language="auto"):
+    key = current_app.config["API_KEY"]
+    if not key:
+        raise ValueError("GEMINI_API_KEY is not configured.")
+
+    model = current_app.config["GEMINI_MODEL"]
+    endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions"
+    if source_language == "auto":
+        language_instruction = "Detect the spoken language automatically."
+    else:
+        source_name = LANGUAGES.get(source_language, source_language)
+        language_instruction = f"The spoken language is {source_name}."
+
+    prompt = (
+        "Analyze this public YouTube video. "
+        f"{language_instruction} "
+        f"Transcribe the spoken content and translate it into {target_language_name}. "
+        "Return ONLY a JSON object with exactly these keys: "
+        "detected_language_name, detected_language_code, transcription, translation. "
+        "Do not summarize; preserve the spoken meaning as completely as practical."
+    )
+
+    payload = {
+        "model": model,
+        "input": [
+            {"type": "text", "text": prompt},
+            {"type": "video", "uri": url},
+        ],
+        "response_format": {
+            "type": "text",
+            "mime_type": "application/json",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "detected_language_name": {"type": "string"},
+                    "detected_language_code": {"type": "string"},
+                    "transcription": {"type": "string"},
+                    "translation": {"type": "string"},
+                },
+                "required": [
+                    "detected_language_name",
+                    "detected_language_code",
+                    "transcription",
+                    "translation",
+                ],
+            },
+        },
+    }
+
+    response = requests.post(
+        endpoint,
+        json=payload,
+        headers={"Content-Type": "application/json", "x-goog-api-key": key},
+        timeout=current_app.config["GEMINI_TIMEOUT"],
+    )
+    if response.status_code not in (200, 201):
+        try:
+            message = response.json().get("error", {}).get("message", response.text)
+        except ValueError:
+            message = response.text
+        raise ValueError(f"Gemini YouTube error: {message}")
+
+    data = response.json()
+    output_text = data.get("output_text")
+    if not output_text:
+        for step in data.get("steps", []):
+            for item in step.get("content", []):
+                if item.get("type") == "text" and item.get("text"):
+                    output_text = item["text"]
+                    break
+            if output_text:
+                break
+
+    if not output_text:
+        raise ValueError("Gemini returned no YouTube translation output.")
+
+    return _parse_json(output_text)
 
 
 def process_audio(audio_path, target_language_name, source_language="auto"):
