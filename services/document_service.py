@@ -45,31 +45,63 @@ def encode_file(path):
         return base64.b64encode(file.read()).decode("utf-8")
 
 
+def _translate_fragment(text, translate_text_func, target_language, source_language):
+    """Translate one Word text fragment and normalize the expected response."""
+    result = translate_text_func(text, target_language, source_language)
+    translated = result.get("translation") if isinstance(result, dict) else None
+    if not translated:
+        raise ValueError("Translation service returned no translated text for a Word document fragment.")
+    return translated
+
+
+def _translate_paragraph_preserving_runs(paragraph, translate_text_func, target_language, source_language):
+    """Translate a paragraph while retaining its existing run formatting.
+
+    For normally formatted paragraphs each run is translated independently. If a
+    provider error occurs on an individual run, the whole paragraph is translated
+    as a fallback and placed in the first non-empty run; remaining runs are cleared.
+    This prevents one problematic run from causing the complete document request to fail.
+    """
+    runs = [run for run in paragraph.runs if run.text and run.text.strip()]
+    if not runs:
+        return
+
+    try:
+        for run in runs:
+            run.text = _translate_fragment(run.text, translate_text_func, target_language, source_language)
+    except Exception:
+        original = "".join(run.text for run in runs).strip()
+        if not original:
+            return
+        translated = _translate_fragment(original, translate_text_func, target_language, source_language)
+        runs[0].text = translated
+        for run in runs[1:]:
+            run.text = ""
+
+
+def _translate_paragraph_collection(paragraphs, translate_text_func, target_language, source_language):
+    for paragraph in paragraphs:
+        _translate_paragraph_preserving_runs(paragraph, translate_text_func, target_language, source_language)
+
+
 def translate_docx_preserving_format(path, output_path, translate_text_func, target_language, source_language="auto"):
     document = Document(path)
 
-    def translate_runs(paragraphs):
-        for paragraph in paragraphs:
-            for run in paragraph.runs:
-                original = run.text
-                if not original or not original.strip():
-                    continue
-                translated = translate_text_func(original, target_language, source_language).get("translation", "")
-                if translated:
-                    run.text = translated
+    _translate_paragraph_collection(document.paragraphs, translate_text_func, target_language, source_language)
 
-    translate_runs(document.paragraphs)
     for table in document.tables:
         for row in table.rows:
             for cell in row.cells:
-                translate_runs(cell.paragraphs)
+                _translate_paragraph_collection(cell.paragraphs, translate_text_func, target_language, source_language)
                 for nested_table in cell.tables:
                     for nested_row in nested_table.rows:
                         for nested_cell in nested_row.cells:
-                            translate_runs(nested_cell.paragraphs)
+                            _translate_paragraph_collection(nested_cell.paragraphs, translate_text_func, target_language, source_language)
+
     for section in document.sections:
-        translate_runs(section.header.paragraphs)
-        translate_runs(section.footer.paragraphs)
+        _translate_paragraph_collection(section.header.paragraphs, translate_text_func, target_language, source_language)
+        _translate_paragraph_collection(section.footer.paragraphs, translate_text_func, target_language, source_language)
+
     document.save(output_path)
 
 
