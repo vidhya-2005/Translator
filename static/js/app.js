@@ -32,8 +32,43 @@ let activeMethod = "text";
 let recorder = null;
 let chunks = [];
 let recordedFile = null;
+let availableVoices = [];
 
 function showError(message) { errorMessage.textContent = message; }
+
+function loadSpeechVoices() {
+    if ("speechSynthesis" in window) {
+        availableVoices = window.speechSynthesis.getVoices();
+    }
+}
+
+if ("speechSynthesis" in window) {
+    loadSpeechVoices();
+    if ("onvoiceschanged" in window.speechSynthesis) {
+        window.speechSynthesis.addEventListener("voiceschanged", loadSpeechVoices);
+    }
+}
+
+function normalizeLanguageCode(code) {
+    const aliases = {
+        "zh-cn": "zh-CN",
+        "zh-tw": "zh-TW",
+        "pt": "pt-BR",
+        "iw": "he",
+        "in": "id",
+        "ji": "yi"
+    };
+    return aliases[code.toLowerCase()] || code;
+}
+
+function findSpeechVoice(languageCode) {
+    const requested = normalizeLanguageCode(languageCode).toLowerCase();
+    if (!availableVoices.length && "speechSynthesis" in window) loadSpeechVoices();
+
+    return availableVoices.find(voice => voice.lang.toLowerCase() === requested)
+        || availableVoices.find(voice => voice.lang.toLowerCase().split("-")[0] === requested.split("-")[0])
+        || availableVoices.find(voice => voice.lang.toLowerCase().startsWith(`${requested.split("-")[0]}-`));
+}
 
 function resetOutput() {
     resultsSection.classList.add("hidden");
@@ -236,10 +271,41 @@ recordBtn.addEventListener("click", async () => {
 });
 
 copyBtn.addEventListener("click", async () => { if (translation.value) await navigator.clipboard.writeText(translation.value); });
+
 playBtn.addEventListener("click", () => {
-    if (!translation.value) return;
-    speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(translation.value);
-    utterance.lang = targetLang.value;
-    speechSynthesis.speak(utterance);
+    const text = translation.value.trim();
+    if (!text) return;
+
+    if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
+        showError("Text-to-speech is not supported by this browser.");
+        return;
+    }
+
+    window.speechSynthesis.cancel();
+    loadSpeechVoices();
+
+    const languageCode = normalizeLanguageCode(targetLang.value);
+    const voice = findSpeechVoice(languageCode);
+
+    if (!voice) {
+        const targetName = targetLang.options[targetLang.selectedIndex]?.text || "the selected language";
+        showError(`No ${targetName} speech voice is available in your browser. Install a ${targetName} voice/language pack in your system and try again.`);
+        return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = voice.lang;
+    utterance.voice = voice;
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+
+    utterance.onstart = () => showError("");
+    utterance.onerror = event => {
+        if (event.error !== "canceled" && event.error !== "interrupted") {
+            showError(`Could not play the translation: ${event.error || "speech synthesis error"}.`);
+        }
+    };
+
+    window.speechSynthesis.speak(utterance);
 });
