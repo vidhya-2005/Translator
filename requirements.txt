@@ -8,3 +8,4 @@ pypdf
 python-docx
 youtube-transcript-api==1.2.4
 imageio-ffmpeg
+PyMuPDF
