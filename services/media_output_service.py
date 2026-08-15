@@ -7,7 +7,6 @@ import wave
 import requests
 import imageio_ffmpeg
 
-
 TTS_MODEL = "gemini-3.1-flash-tts-preview"
 
 
@@ -19,6 +18,10 @@ def _run(args):
     subprocess.run([_ffmpeg(), *args], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
+def convert_to_wav(input_path, output_path):
+    _run(["-y", "-i", input_path, "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", output_path])
+
+
 def generate_tts(text, api_key, output_path):
     if not text.strip():
         raise ValueError("There is no translated text to generate audio from.")
@@ -27,7 +30,7 @@ def generate_tts(text, api_key, output_path):
         headers={"Content-Type": "application/json", "x-goog-api-key": api_key, "Api-Revision": "2026-05-20"},
         json={
             "model": TTS_MODEL,
-            "input": f"Read the following translated text naturally and clearly. Do not add or remove words.\n\n{text}",
+            "input": f"Synthesize the following translated text exactly. Speak naturally and clearly.\n\n{text}",
             "response_format": {"type": "audio"},
             "generation_config": {"speech_config": [{"voice": "Kore"}]},
         },
@@ -53,7 +56,6 @@ def generate_tts(text, api_key, output_path):
     if not encoded:
         raise ValueError("Gemini TTS returned no audio.")
     raw = base64.b64decode(encoded)
-    # Gemini TTS returns PCM for the current REST interaction format in practice.
     with wave.open(output_path, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
@@ -62,11 +64,7 @@ def generate_tts(text, api_key, output_path):
 
 
 def video_with_translated_audio(video_path, translated_audio_path, output_path):
-    _run([
-        "-y", "-i", video_path, "-i", translated_audio_path,
-        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac",
-        "-shortest", output_path,
-    ])
+    _run(["-y", "-i", video_path, "-i", translated_audio_path, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", output_path])
 
 
 def audio_as_mp3(wav_path, output_path):
