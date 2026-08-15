@@ -10,41 +10,29 @@ const recordBtn = document.getElementById("record-btn");
 const transcription = document.getElementById("transcription");
 const translation = document.getElementById("translation");
 const detectedLanguage = document.getElementById("detected-language");
+const resultsSection = document.getElementById("results-section");
 const copyBtn = document.getElementById("copy-btn");
 const playBtn = document.getElementById("play-btn");
 const errorMessage = document.getElementById("error-message");
 const recordingStatus = document.getElementById("recording-status");
+const fileName = document.getElementById("file-name");
 const processingPanel = document.getElementById("processing-panel");
 const processingTitle = document.getElementById("processing-title");
 const processingDetail = document.getElementById("processing-detail");
 const steps = [document.getElementById("step-1"), document.getElementById("step-2"), document.getElementById("step-3")];
+const swapLanguages = document.getElementById("swap-languages");
+const methodButtons = document.querySelectorAll(".input-method");
+const panels = document.querySelectorAll(".input-panel");
 
+let activeMethod = "text";
 let recorder = null;
 let chunks = [];
+let recordedFile = null;
 
 function showError(message) { errorMessage.textContent = message; }
 
-function setProcessing(value, type = "text") {
-    processingPanel.classList.toggle("hidden", !value);
-    translateBtn.disabled = value;
-    recordBtn.disabled = value;
-    if (!value) return;
-
-    const labels = {
-        text: ["Translating text", "Reading your text and preparing the translation..."],
-        file: ["Processing your file", "Extracting content and preparing the translation..."],
-        youtube: ["Analyzing YouTube video", "Sending the public video to Gemini for analysis..."]
-    };
-    const [title, detail] = labels[type] || labels.text;
-    processingTitle.textContent = title;
-    processingDetail.textContent = detail;
-    steps.forEach((step, index) => step.classList.toggle("active", index === 0));
-
-    setTimeout(() => { if (processingPanel.classList.contains("hidden")) return; steps[1].classList.add("active"); processingDetail.textContent = type === "youtube" ? "Analyzing the video and spoken language..." : "Detecting language and understanding the content..."; }, 350);
-    setTimeout(() => { if (processingPanel.classList.contains("hidden")) return; steps[2].classList.add("active"); processingDetail.textContent = "Generating your translation..."; }, 1100);
-}
-
 function resetOutput() {
+    resultsSection.classList.add("hidden");
     transcription.value = "";
     translation.value = "";
     detectedLanguage.textContent = "Detected language: —";
@@ -52,16 +40,27 @@ function resetOutput() {
     showError("");
 }
 
-function clearOtherInputs(active) {
-    if (active !== "text") textInput.value = "";
-    if (active !== "file") fileUpload.value = "";
-    if (active !== "youtube") youtubeInput.value = "";
+function setMethod(method) {
+    activeMethod = method;
+    methodButtons.forEach(button => button.classList.toggle("active", button.dataset.method === method));
+    panels.forEach(panel => panel.classList.toggle("active", panel.id === `panel-${method}`));
+    panels.forEach(panel => panel.classList.toggle("hidden", panel.id !== `panel-${method}`));
+    resetOutput();
 }
+
+methodButtons.forEach(button => button.addEventListener("click", () => setMethod(button.dataset.method)));
+
+fileUpload.addEventListener("change", () => {
+    fileName.textContent = fileUpload.files[0]?.name || "PNG, JPG, PDF, DOCX, audio or video";
+    resetOutput();
+});
+
+youtubeInput.addEventListener("input", resetOutput);
+textInput.addEventListener("input", resetOutput);
 
 function syncLanguageSearch(input, select) {
     const value = input.value.trim().toLowerCase();
-    const options = Array.from(select.options);
-    const exact = options.find(option => option.text.toLowerCase() === value);
+    const exact = Array.from(select.options).find(option => option.text.toLowerCase() === value);
     if (exact) select.value = exact.value;
 }
 
@@ -70,16 +69,52 @@ function syncLanguageInput(select, input) {
     input.value = option ? option.text : "";
 }
 
-sourceSearch.addEventListener("input", () => syncLanguageSearch(sourceSearch, sourceLang));
-targetSearch.addEventListener("input", () => syncLanguageSearch(targetSearch, targetLang));
 sourceSearch.addEventListener("change", () => syncLanguageSearch(sourceSearch, sourceLang));
 targetSearch.addEventListener("change", () => syncLanguageSearch(targetSearch, targetLang));
+sourceSearch.addEventListener("input", () => syncLanguageSearch(sourceSearch, sourceLang));
+targetSearch.addEventListener("input", () => syncLanguageSearch(targetSearch, targetLang));
 sourceLang.addEventListener("change", () => syncLanguageInput(sourceLang, sourceSearch));
 targetLang.addEventListener("change", () => syncLanguageInput(targetLang, targetSearch));
 
-textInput.addEventListener("input", () => { if (textInput.value.trim()) clearOtherInputs("text"); });
-fileUpload.addEventListener("change", () => { if (fileUpload.files.length) clearOtherInputs("file"); });
-youtubeInput.addEventListener("input", () => { if (youtubeInput.value.trim()) clearOtherInputs("youtube"); });
+swapLanguages.addEventListener("click", () => {
+    if (sourceLang.value === "auto") return;
+    const sourceValue = sourceLang.value;
+    sourceLang.value = targetLang.value;
+    targetLang.value = sourceValue;
+    syncLanguageInput(sourceLang, sourceSearch);
+    syncLanguageInput(targetLang, targetSearch);
+});
+
+function setProcessing(value, type = "text") {
+    processingPanel.classList.toggle("hidden", !value);
+    translateBtn.disabled = value;
+    methodButtons.forEach(button => button.disabled = value);
+    recordBtn.disabled = value;
+    if (!value) return;
+
+    const labels = {
+        text: ["Translating text", "Reading your text and preparing the translation..."],
+        file: ["Processing your file", "Extracting content and preparing the translation..."],
+        youtube: ["Analyzing YouTube video", "Sending the public video to Gemini for analysis..."],
+        record: ["Processing your recording", "Transcribing your recorded speech..."]
+    };
+    const [title, detail] = labels[type] || labels.text;
+    processingTitle.textContent = title;
+    processingDetail.textContent = detail;
+    steps.forEach((step, index) => step.classList.toggle("active", index === 0));
+    setTimeout(() => { if (!processingPanel.classList.contains("hidden")) { steps[1].classList.add("active"); processingDetail.textContent = "Detecting language and understanding the content..."; } }, 350);
+    setTimeout(() => { if (!processingPanel.classList.contains("hidden")) { steps[2].classList.add("active"); processingDetail.textContent = "Generating your translation..."; } }, 1100);
+}
+
+function showResult(data) {
+    transcription.value = data.transcription || "";
+    translation.value = data.translation || "";
+    const language = data.detected_language_name || data.detected_language_code || "—";
+    detectedLanguage.textContent = `Detected language: ${language}`;
+    playBtn.disabled = !data.translation;
+    resultsSection.classList.remove("hidden");
+    setTimeout(() => resultsSection.scrollIntoView({behavior: "smooth", block: "start"}), 80);
+}
 
 async function handleResponse(response) {
     const contentType = response.headers.get("content-type") || "";
@@ -89,16 +124,8 @@ async function handleResponse(response) {
     return data;
 }
 
-function showResult(data) {
-    transcription.value = data.transcription || "";
-    translation.value = data.translation || "";
-    const language = data.detected_language_name || data.detected_language_code || "—";
-    detectedLanguage.textContent = `Detected language: ${language}`;
-    playBtn.disabled = !data.translation;
-}
-
 async function translateText() {
-    const response = await fetch("/translate-text", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ text: textInput.value.trim(), source_language: sourceLang.value, target_language_name: targetLang.options[targetLang.selectedIndex].text }) });
+    const response = await fetch("/translate-text", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: textInput.value.trim(), source_language: sourceLang.value, target_language_name: targetLang.options[targetLang.selectedIndex].text})});
     showResult(await handleResponse(response));
 }
 
@@ -111,51 +138,61 @@ async function translateFile(file) {
 }
 
 async function translateYouTube(url) {
-    const response = await fetch("/translate-youtube", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ url, source_language: sourceLang.value, target_language_name: targetLang.options[targetLang.selectedIndex].text }) });
+    const response = await fetch("/translate-youtube", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({url, source_language: sourceLang.value, target_language_name: targetLang.options[targetLang.selectedIndex].text})});
     showResult(await handleResponse(response));
 }
 
 translateBtn.addEventListener("click", async () => {
     resetOutput();
-    const text = textInput.value.trim();
-    const url = youtubeInput.value.trim();
-    const file = fileUpload.files[0];
-    const inputs = [Boolean(text), Boolean(url), Boolean(file)].filter(Boolean).length;
-    if (inputs === 0) { showError("Provide one input: text, file, or YouTube URL."); return; }
-    if (inputs > 1) { showError("Please use only one input at a time."); return; }
-
-    const type = text ? "text" : url ? "youtube" : "file";
-    setProcessing(true, type);
+    let type = activeMethod;
     try {
-        if (text) await translateText();
-        else if (url) await translateYouTube(url);
-        else await translateFile(file);
-    } catch (error) { showError(error.message); }
-    finally { setProcessing(false); }
+        if (activeMethod === "text") {
+            if (!textInput.value.trim()) throw new Error("Enter some text to translate.");
+            type = "text";
+        } else if (activeMethod === "file") {
+            if (!fileUpload.files[0]) throw new Error("Choose a file to translate.");
+            type = "file";
+        } else if (activeMethod === "youtube") {
+            if (!youtubeInput.value.trim()) throw new Error("Paste a YouTube URL.");
+            type = "youtube";
+        } else if (activeMethod === "record") {
+            if (!recordedFile) throw new Error("Record your voice first.");
+            type = "record";
+        }
+
+        setProcessing(true, type);
+        if (activeMethod === "text") await translateText();
+        else if (activeMethod === "file") await translateFile(fileUpload.files[0]);
+        else if (activeMethod === "youtube") await translateYouTube(youtubeInput.value.trim());
+        else await translateFile(recordedFile);
+    } catch (error) {
+        showError(error.message);
+    } finally {
+        setProcessing(false);
+    }
 });
 
 recordBtn.addEventListener("click", async () => {
     try {
         if (!recorder) {
-            clearOtherInputs("file");
+            resetOutput();
             const stream = await navigator.mediaDevices.getUserMedia({audio: true});
             recorder = new MediaRecorder(stream);
             chunks = [];
-            recorder.ondataavailable = e => chunks.push(e.data);
-            recorder.onstop = async () => {
+            recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+            recorder.onstop = () => {
                 const blob = new Blob(chunks, {type: "audio/webm"});
-                setProcessing(true, "file");
-                try { await translateFile(new File([blob], "recording.webm", {type: "audio/webm"})); }
-                catch (error) { showError(error.message); }
-                finally { setProcessing(false); stream.getTracks().forEach(track => track.stop()); recorder = null; }
+                recordedFile = new File([blob], "recording.webm", {type: "audio/webm"});
+                recordingStatus.textContent = "Recording ready. Click Translate to continue.";
+                recordBtn.textContent = "Record again";
+                stream.getTracks().forEach(track => track.stop());
+                recorder = null;
             };
             recorder.start();
-            recordBtn.textContent = "⏹ Stop";
+            recordBtn.textContent = "Stop recording";
             recordingStatus.textContent = "Recording... click Stop when finished.";
         } else {
             recorder.stop();
-            recordBtn.textContent = "🎙 Record";
-            recordingStatus.textContent = "Processing recording...";
         }
     } catch { showError("Microphone access was denied or is unavailable."); }
 });
