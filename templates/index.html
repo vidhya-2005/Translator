@@ -11,14 +11,14 @@
     <header class="hero">
         <div class="eyebrow">AI-POWERED LANGUAGE TOOLS</div>
         <h1>Universal Translator</h1>
-        <p>Choose your input, select languages, and translate.</p>
+        <p>Translate text, documents, images, audio, video, voice recordings and public YouTube videos.</p>
     </header>
 
     <section class="setup-card">
         <div class="section-heading"><div class="step-number">1</div><div><h2>Choose your input</h2><p>Select one way to provide content.</p></div></div>
         <div class="input-methods" role="tablist" aria-label="Input method">
             <button class="input-method active" data-method="text" type="button"><span>⌨</span><strong>Text</strong><small>Type or paste</small></button>
-            <button class="input-method" data-method="file" type="button"><span>↥</span><strong>File</strong><small>PDF, image, audio</small></button>
+            <button class="input-method" data-method="file" type="button"><span>↥</span><strong>File</strong><small>PDF, image, audio or video</small></button>
             <button class="input-method" data-method="record" type="button"><span>●</span><strong>Record</strong><small>Use microphone</small></button>
             <button class="input-method" data-method="youtube" type="button"><span>▶</span><strong>YouTube</strong><small>Paste public URL</small></button>
             <button class="input-method" data-method="word" type="button"><span>📄</span><strong>Word</strong><small>Preserve format</small></button>
@@ -46,6 +46,8 @@
     </section>
 
     <div id="processing-panel" class="processing-panel hidden" aria-live="polite"><div class="processing-spinner"></div><div class="processing-content"><strong id="processing-title">Processing your input</strong><span id="processing-detail">Preparing translation...</span><div class="processing-steps"><span id="step-1" class="active">1. Preparing</span><span id="step-2">2. Analyzing</span><span id="step-3">3. Translating</span></div></div></div>
+
+    <section id="download-result" class="document-result hidden"><div><div class="eyebrow">FILE READY</div><h2 id="download-title">Translated file ready</h2><p id="download-detail">Your translated file is ready to download.</p></div><a id="download-result-btn" class="translate-btn download-link" href="#" download>↓ Download translated file</a></section>
 
     <section id="word-result" class="document-result hidden"><div><div class="eyebrow">DOCUMENT READY</div><h2>Translated Word document</h2><p>Your document structure and formatting have been retained.</p></div><button id="download-word-btn" class="translate-btn" type="button">↓ Download translated Word file</button></section>
 
