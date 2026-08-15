@@ -27,7 +27,6 @@ const wordFileName = document.getElementById("word-file-name");
 const processingPanel = document.getElementById("processing-panel");
 const processingTitle = document.getElementById("processing-title");
 const processingDetail = document.getElementById("processing-detail");
-const steps = [document.getElementById("step-1"), document.getElementById("step-2"), document.getElementById("step-3")];
 const swapLanguages = document.getElementById("swap-languages");
 const methodButtons = document.querySelectorAll(".input-method");
 const panels = document.querySelectorAll(".input-panel");
@@ -83,19 +82,13 @@ sourceLang.addEventListener("change", () => syncLanguageInput(sourceLang, source
 targetLang.addEventListener("change", () => syncLanguageInput(targetLang, targetSearch));
 swapLanguages.addEventListener("click", () => { if (sourceLang.value === "auto") return; const s = sourceLang.value; sourceLang.value = targetLang.value; targetLang.value = s; syncLanguageInput(sourceLang, sourceSearch); syncLanguageInput(targetLang, targetSearch); });
 
-function setProcessing(value, type = "text") {
-    processingPanel.classList.toggle("hidden", !value); translateBtn.disabled = value; methodButtons.forEach(b => b.disabled = value); recordBtn.disabled = value;
-    if (!value) return;
-    const labels = {
-        text: ["Translating text", "Reading your text and preparing the translation..."],
-        file: ["Processing your file", "Extracting content and preparing the translated download..."],
-        youtube: ["Analyzing YouTube video", "Sending the public video to Gemini for analysis..."],
-        record: ["Processing your recording", "Transcribing and generating translated audio..."],
-        word: ["Translating Word document", "Translating text while preserving document structure and formatting..."]
-    };
-    const [title, detail] = labels[type] || labels.text; processingTitle.textContent = title; processingDetail.textContent = detail; steps.forEach((s, i) => s.classList.toggle("active", i === 0));
-    setTimeout(() => { if (processingPanel.classList.contains("hidden")) return; steps[1].classList.add("active"); processingDetail.textContent = type === "word" ? "Translating document text and keeping formatting intact..." : "Detecting language and preparing the translated file..."; }, 500);
-    setTimeout(() => { if (processingPanel.classList.contains("hidden")) return; steps[2].classList.add("active"); processingDetail.textContent = "Creating your translated output..."; }, 1400);
+// Keep processing feedback minimal: disable controls while the request is running,
+// but do not display the old multi-step processing panel.
+function setProcessing(value) {
+    translateBtn.disabled = value;
+    methodButtons.forEach(b => b.disabled = value);
+    recordBtn.disabled = value;
+    if (processingPanel) processingPanel.classList.add("hidden");
 }
 function showResult(data) {
     transcription.value = data.transcription || ""; translation.value = data.translation || "";
@@ -147,11 +140,11 @@ async function translateWord(file) {
 translateBtn.addEventListener("click", async () => {
     resetOutput();
     try {
-        if (activeMethod === "text") { if (!textInput.value.trim()) throw new Error("Enter some text to translate."); setProcessing(true,"text"); await translateText(); }
-        else if (activeMethod === "file") { if (!fileUpload.files[0]) throw new Error("Choose a file to translate."); setProcessing(true,"file"); await translateFile(fileUpload.files[0]); }
-        else if (activeMethod === "youtube") { if (!youtubeInput.value.trim()) throw new Error("Paste a YouTube URL."); setProcessing(true,"youtube"); await translateYouTube(youtubeInput.value.trim()); }
-        else if (activeMethod === "word") { if (!wordUpload.files[0]) throw new Error("Choose a .docx Word document."); setProcessing(true,"word"); await translateWord(wordUpload.files[0]); }
-        else { if (!recordedFile) throw new Error("Record your voice first."); setProcessing(true,"record"); await translateFile(recordedFile); }
+        if (activeMethod === "text") { if (!textInput.value.trim()) throw new Error("Enter some text to translate."); setProcessing(true); await translateText(); }
+        else if (activeMethod === "file") { if (!fileUpload.files[0]) throw new Error("Choose a file to translate."); setProcessing(true); await translateFile(fileUpload.files[0]); }
+        else if (activeMethod === "youtube") { if (!youtubeInput.value.trim()) throw new Error("Paste a YouTube URL."); setProcessing(true); await translateYouTube(youtubeInput.value.trim()); }
+        else if (activeMethod === "word") { if (!wordUpload.files[0]) throw new Error("Choose a .docx Word document."); setProcessing(true); await translateWord(wordUpload.files[0]); }
+        else { if (!recordedFile) throw new Error("Record your voice first."); setProcessing(true); await translateFile(recordedFile); }
     } catch (error) { showError(error.message); } finally { setProcessing(false); }
 });
 
