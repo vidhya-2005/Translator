@@ -15,88 +15,41 @@
     </header>
 
     <section class="setup-card">
-        <div class="section-heading">
-            <div class="step-number">1</div>
-            <div><h2>Choose your input</h2><p>Select one way to provide content.</p></div>
-        </div>
-
+        <div class="section-heading"><div class="step-number">1</div><div><h2>Choose your input</h2><p>Select one way to provide content.</p></div></div>
         <div class="input-methods" role="tablist" aria-label="Input method">
             <button class="input-method active" data-method="text" type="button"><span>⌨</span><strong>Text</strong><small>Type or paste</small></button>
-            <button class="input-method" data-method="file" type="button"><span>↥</span><strong>File</strong><small>PDF, image, Word, audio</small></button>
+            <button class="input-method" data-method="file" type="button"><span>↥</span><strong>File</strong><small>PDF, image, audio</small></button>
             <button class="input-method" data-method="record" type="button"><span>●</span><strong>Record</strong><small>Use microphone</small></button>
             <button class="input-method" data-method="youtube" type="button"><span>▶</span><strong>YouTube</strong><small>Paste public URL</small></button>
+            <button class="input-method" data-method="word" type="button"><span>📄</span><strong>Word</strong><small>Preserve format</small></button>
         </div>
 
         <div class="input-panels">
-            <div id="panel-text" class="input-panel active">
-                <label for="text-input">Your text</label>
-                <textarea id="text-input" rows="7" placeholder="Enter or paste the text you want to translate..."></textarea>
-            </div>
-
-            <div id="panel-file" class="input-panel hidden">
-                <label for="file-upload">Upload a file</label>
-                <label class="upload-box" for="file-upload">
-                    <span class="upload-icon">↥</span>
-                    <strong>Choose a file</strong>
-                    <span id="file-name">PNG, JPG, PDF, DOCX, audio or video</span>
-                </label>
-                <input id="file-upload" type="file" accept=".png,.jpg,.jpeg,.pdf,.docx,audio/*,video/*" hidden>
-            </div>
-
-            <div id="panel-record" class="input-panel hidden">
-                <div class="record-box">
-                    <div class="record-icon">🎙</div>
-                    <strong id="record-title">Record your voice</strong>
-                    <p id="recording-status">Click the button to start recording.</p>
-                    <button id="record-btn" class="secondary-btn" type="button">Start recording</button>
-                </div>
-            </div>
-
-            <div id="panel-youtube" class="input-panel hidden">
-                <label for="youtube-link">YouTube URL</label>
-                <input id="youtube-link" type="url" placeholder="https://www.youtube.com/watch?v=...">
-                <small>Use a public YouTube video.</small>
-            </div>
+            <div id="panel-text" class="input-panel active"><label for="text-input">Your text</label><textarea id="text-input" rows="7" placeholder="Enter or paste the text you want to translate..."></textarea></div>
+            <div id="panel-file" class="input-panel hidden"><label for="file-upload">Upload a file</label><label class="upload-box" for="file-upload"><span class="upload-icon">↥</span><strong>Choose a file</strong><span id="file-name">PNG, JPG, PDF, audio or video</span></label><input id="file-upload" type="file" accept=".png,.jpg,.jpeg,.pdf,audio/*,video/*" hidden></div>
+            <div id="panel-record" class="input-panel hidden"><div class="record-box"><div class="record-icon">🎙</div><strong id="record-title">Record your voice</strong><p id="recording-status">Click the button to start recording.</p><button id="record-btn" class="secondary-btn" type="button">Start recording</button></div></div>
+            <div id="panel-youtube" class="input-panel hidden"><label for="youtube-link">YouTube URL</label><input id="youtube-link" type="url" placeholder="https://www.youtube.com/watch?v=..."><small>Use a public YouTube video.</small></div>
+            <div id="panel-word" class="input-panel hidden"><label for="word-upload">Word document</label><label class="upload-box word-upload-box" for="word-upload"><span class="upload-icon">📄</span><strong>Choose a .docx file</strong><span id="word-file-name">Formatting, images and document structure will be preserved</span></label><input id="word-upload" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></div>
         </div>
     </section>
 
     <section class="setup-card language-card">
-        <div class="section-heading">
-            <div class="step-number">2</div>
-            <div><h2>Choose languages</h2><p>Tell the translator what language to use.</p></div>
-        </div>
+        <div class="section-heading"><div class="step-number">2</div><div><h2>Choose languages</h2><p>Tell the translator what language to use.</p></div></div>
         <div class="language-grid">
-            <label>From
-                <div class="language-search"><input id="source-search" list="language-options" autocomplete="off" placeholder="Search language..." value="Auto-Detect"><span class="search-icon">⌕</span></div>
-                <select id="source-lang" class="language-code-select" aria-hidden="true" tabindex="-1"><option value="auto">Auto-Detect</option>{% for code, name in languages.items() %}<option value="{{ code }}">{{ name|capitalize }}</option>{% endfor %}</select>
-            </label>
+            <label>From<div class="language-search"><input id="source-search" list="language-options" autocomplete="off" placeholder="Search language..." value="Auto-Detect"><span class="search-icon">⌕</span></div><select id="source-lang" class="language-code-select" aria-hidden="true" tabindex="-1"><option value="auto">Auto-Detect</option>{% for code, name in languages.items() %}<option value="{{ code }}">{{ name|capitalize }}</option>{% endfor %}</select></label>
             <button id="swap-languages" class="swap-btn" type="button" title="Swap languages">⇄</button>
-            <label>To
-                <div class="language-search"><input id="target-search" list="language-options" autocomplete="off" placeholder="Search language..." value="English"><span class="search-icon">⌕</span></div>
-                <select id="target-lang" class="language-code-select" aria-hidden="true" tabindex="-1">{% for code, name in languages.items() %}<option value="{{ code }}" {% if code == "en" %}selected{% endif %}>{{ name|capitalize }}</option>{% endfor %}</select>
-            </label>
+            <label>To<div class="language-search"><input id="target-search" list="language-options" autocomplete="off" placeholder="Search language..." value="English"><span class="search-icon">⌕</span></div><select id="target-lang" class="language-code-select" aria-hidden="true" tabindex="-1">{% for code, name in languages.items() %}<option value="{{ code }}" {% if code == "en" %}selected{% endif %}>{{ name|capitalize }}</option>{% endfor %}</select></label>
         </div>
         <datalist id="language-options"><option value="Auto-Detect"></option>{% for code, name in languages.items() %}<option value="{{ name|capitalize }}"></option>{% endfor %}</datalist>
-
         <button id="translate-btn" class="translate-btn" type="button">Translate <span>→</span></button>
         <p id="error-message" class="error"></p>
     </section>
 
-    <div id="processing-panel" class="processing-panel hidden" aria-live="polite">
-        <div class="processing-spinner"></div>
-        <div class="processing-content"><strong id="processing-title">Processing your input</strong><span id="processing-detail">Preparing translation...</span><div class="processing-steps"><span id="step-1" class="active">1. Preparing</span><span id="step-2">2. Analyzing</span><span id="step-3">3. Translating</span></div></div>
-    </div>
+    <div id="processing-panel" class="processing-panel hidden" aria-live="polite"><div class="processing-spinner"></div><div class="processing-content"><strong id="processing-title">Processing your input</strong><span id="processing-detail">Preparing translation...</span><div class="processing-steps"><span id="step-1" class="active">1. Preparing</span><span id="step-2">2. Analyzing</span><span id="step-3">3. Translating</span></div></div></div>
 
-    <section id="results-section" class="results-section hidden">
-        <div class="results-header">
-            <div><div class="eyebrow">TRANSLATION COMPLETE</div><h2>Your result</h2><p id="detected-language">Detected language: —</p></div>
-            <div class="result-actions"><button id="copy-btn" class="secondary-btn" type="button">Copy</button><button id="play-btn" class="secondary-btn" type="button" disabled>▶ Play</button></div>
-        </div>
-        <div class="result-grid">
-            <article class="result-card"><div class="result-label">TRANSCRIPTION / EXTRACTED TEXT</div><textarea id="transcription" rows="9" readonly placeholder="Your detected or extracted text will appear here..."></textarea></article>
-            <article class="result-card translation-result"><div class="result-label">TRANSLATION</div><textarea id="translation" rows="9" readonly placeholder="Your translation will appear here..."></textarea></article>
-        </div>
-    </section>
+    <section id="word-result" class="document-result hidden"><div><div class="eyebrow">DOCUMENT READY</div><h2>Translated Word document</h2><p>Your document structure and formatting have been retained.</p></div><button id="download-word-btn" class="translate-btn" type="button">↓ Download translated Word file</button></section>
+
+    <section id="results-section" class="results-section hidden"><div class="results-header"><div><div class="eyebrow">TRANSLATION COMPLETE</div><h2>Your result</h2><p id="detected-language">Detected language: —</p></div><div class="result-actions"><button id="copy-btn" class="secondary-btn" type="button">Copy</button><button id="play-btn" class="secondary-btn" type="button" disabled>▶ Play</button></div></div><div class="result-grid"><article class="result-card"><div class="result-label">TRANSCRIPTION / EXTRACTED TEXT</div><textarea id="transcription" rows="9" readonly placeholder="Your detected or extracted text will appear here..."></textarea></article><article class="result-card translation-result"><div class="result-label">TRANSLATION</div><textarea id="translation" rows="9" readonly placeholder="Your translation will appear here..."></textarea></article></div></section>
 </main>
 <script>const LANGUAGES = {{ languages|tojson }};</script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
