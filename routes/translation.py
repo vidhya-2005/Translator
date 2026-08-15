@@ -1,9 +1,9 @@
 import os
 import uuid
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file, after_this_request
 from services.gemini_service import translate_text, translate_document, process_audio, translate_youtube
 from services.audio_service import convert_to_wav
-from services.document_service import get_file_type, extract_docx_text
+from services.document_service import get_file_type, extract_docx_text, translate_docx_preserving_format
 from utils.validation import validate_source_target
 
 translation_bp = Blueprint("translation", __name__)
@@ -78,6 +78,67 @@ def file_translation():
         return _error_response(exc)
 
 
+@translation_bp.post("/translate-word")
+def word_translation():
+    """Translate a DOCX in place and return a downloadable DOCX preserving its structure."""
+    input_path = None
+    output_path = None
+    try:
+        if "file" not in request.files:
+            return jsonify(error="No Word document provided."), 400
+
+        file = request.files["file"]
+        if not file.filename:
+            return jsonify(error="No Word document selected."), 400
+        if not file.filename.lower().endswith(".docx"):
+            return jsonify(error="Please upload a .docx Word document. Legacy .doc files are not supported."), 400
+
+        source = request.form.get("source_language", "auto")
+        target = request.form.get("target_language_name", "English")
+        validate_source_target(source, target)
+
+        os.makedirs("tmp", exist_ok=True)
+        token = str(uuid.uuid4())
+        input_path = os.path.join("tmp", f"{token}.docx")
+        output_path = os.path.join("tmp", f"{token}_translated.docx")
+        file.save(input_path)
+
+        translate_docx_preserving_format(
+            input_path,
+            output_path,
+            translate_text,
+            target,
+            source,
+        )
+
+        @after_this_request
+        def cleanup(response):
+            for path in (input_path, output_path):
+                try:
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                except OSError:
+                    pass
+            return response
+
+        original_name = os.path.splitext(os.path.basename(file.filename))[0]
+        download_name = f"{original_name}_translated.docx"
+        return send_file(
+            output_path,
+            as_attachment=True,
+            download_name=download_name,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    except Exception as exc:
+        for path in (input_path, output_path):
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+        return _error_response(exc)
+
+
 @translation_bp.post("/translate-youtube")
 def youtube_translation():
     try:
@@ -89,9 +150,6 @@ def youtube_translation():
         if not url:
             return jsonify(error="No YouTube URL provided"), 400
         validate_source_target(source, target)
-
-        # Gemini receives the public YouTube URL directly. The Render server
-        # does not download the video and therefore does not need YouTube access.
         return jsonify(translate_youtube(url, target, source))
     except Exception as exc:
         return _error_response(exc)
