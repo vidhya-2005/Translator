@@ -1,9 +1,8 @@
 import os
 import uuid
 from flask import Blueprint, jsonify, request
-from services.gemini_service import translate_text, translate_document, process_audio
+from services.gemini_service import translate_text, translate_document, process_audio, translate_youtube
 from services.audio_service import convert_to_wav
-from services.youtube_service import download_youtube_audio, get_youtube_transcript
 from services.document_service import get_file_type, extract_docx_text
 from utils.validation import validate_source_target
 
@@ -12,18 +11,6 @@ translation_bp = Blueprint("translation", __name__)
 
 def _error_response(exc):
     return jsonify(error=str(exc) or "An unexpected error occurred."), 500
-
-
-def _youtube_transcript_result(transcript, target):
-    result = translate_text(
-        transcript["transcription"],
-        target,
-        transcript["language_code"],
-    )
-    result["detected_language_code"] = transcript["language_code"]
-    result["detected_language_name"] = transcript["language_name"]
-    result["is_generated_transcript"] = transcript["is_generated"]
-    return result
 
 
 @translation_bp.post("/translate-text")
@@ -98,30 +85,13 @@ def youtube_translation():
         url = (data.get("url") or "").strip()
         source = data.get("source_language", "auto")
         target = data.get("target_language_name", "English")
+
         if not url:
             return jsonify(error="No YouTube URL provided"), 400
         validate_source_target(source, target)
 
-        # Primary path: use captions/transcript, avoiding server-side video extraction.
-        try:
-            transcript = get_youtube_transcript(url, source)
-            return jsonify(_youtube_transcript_result(transcript, target))
-        except Exception as transcript_error:
-            transcript_message = str(transcript_error)
-
-        # Fallback: download audio if captions are unavailable.
-        token = str(uuid.uuid4())
-        os.makedirs("tmp", exist_ok=True)
-        wav_path = os.path.join("tmp", f"{token}.wav")
-        try:
-            download_youtube_audio(url, wav_path)
-            return jsonify(process_audio(wav_path, target, source))
-        except Exception as audio_error:
-            raise ValueError(
-                f"YouTube transcript unavailable ({transcript_message}) and audio extraction failed: {audio_error}"
-            ) from audio_error
-        finally:
-            if os.path.exists(wav_path):
-                os.remove(wav_path)
+        # Gemini receives the public YouTube URL directly. The Render server
+        # does not download the video and therefore does not need YouTube access.
+        return jsonify(translate_youtube(url, target, source))
     except Exception as exc:
         return _error_response(exc)
