@@ -1,5 +1,6 @@
 const textInput = document.getElementById("text-input");
 const fileUpload = document.getElementById("file-upload");
+const wordUpload = document.getElementById("word-upload");
 const youtubeInput = document.getElementById("youtube-link");
 const sourceLang = document.getElementById("source-lang");
 const targetLang = document.getElementById("target-lang");
@@ -11,11 +12,14 @@ const transcription = document.getElementById("transcription");
 const translation = document.getElementById("translation");
 const detectedLanguage = document.getElementById("detected-language");
 const resultsSection = document.getElementById("results-section");
+const wordResult = document.getElementById("word-result");
+const downloadWordBtn = document.getElementById("download-word-btn");
 const copyBtn = document.getElementById("copy-btn");
 const playBtn = document.getElementById("play-btn");
 const errorMessage = document.getElementById("error-message");
 const recordingStatus = document.getElementById("recording-status");
 const fileName = document.getElementById("file-name");
+const wordFileName = document.getElementById("word-file-name");
 const processingPanel = document.getElementById("processing-panel");
 const processingTitle = document.getElementById("processing-title");
 const processingDetail = document.getElementById("processing-detail");
@@ -33,6 +37,7 @@ function showError(message) { errorMessage.textContent = message; }
 
 function resetOutput() {
     resultsSection.classList.add("hidden");
+    wordResult.classList.add("hidden");
     transcription.value = "";
     translation.value = "";
     detectedLanguage.textContent = "Detected language: —";
@@ -51,10 +56,13 @@ function setMethod(method) {
 methodButtons.forEach(button => button.addEventListener("click", () => setMethod(button.dataset.method)));
 
 fileUpload.addEventListener("change", () => {
-    fileName.textContent = fileUpload.files[0]?.name || "PNG, JPG, PDF, DOCX, audio or video";
+    fileName.textContent = fileUpload.files[0]?.name || "PNG, JPG, PDF, audio or video";
     resetOutput();
 });
-
+wordUpload.addEventListener("change", () => {
+    wordFileName.textContent = wordUpload.files[0]?.name || "Formatting, images and document structure will be preserved";
+    resetOutput();
+});
 youtubeInput.addEventListener("input", resetOutput);
 textInput.addEventListener("input", resetOutput);
 
@@ -63,19 +71,16 @@ function syncLanguageSearch(input, select) {
     const exact = Array.from(select.options).find(option => option.text.toLowerCase() === value);
     if (exact) select.value = exact.value;
 }
-
 function syncLanguageInput(select, input) {
     const option = select.options[select.selectedIndex];
     input.value = option ? option.text : "";
 }
-
-sourceSearch.addEventListener("change", () => syncLanguageSearch(sourceSearch, sourceLang));
-targetSearch.addEventListener("change", () => syncLanguageSearch(targetSearch, targetLang));
 sourceSearch.addEventListener("input", () => syncLanguageSearch(sourceSearch, sourceLang));
 targetSearch.addEventListener("input", () => syncLanguageSearch(targetSearch, targetLang));
+sourceSearch.addEventListener("change", () => syncLanguageSearch(sourceSearch, sourceLang));
+targetSearch.addEventListener("change", () => syncLanguageSearch(targetSearch, targetLang));
 sourceLang.addEventListener("change", () => syncLanguageInput(sourceLang, sourceSearch));
 targetLang.addEventListener("change", () => syncLanguageInput(targetLang, targetSearch));
-
 swapLanguages.addEventListener("click", () => {
     if (sourceLang.value === "auto") return;
     const sourceValue = sourceLang.value;
@@ -91,19 +96,27 @@ function setProcessing(value, type = "text") {
     methodButtons.forEach(button => button.disabled = value);
     recordBtn.disabled = value;
     if (!value) return;
-
     const labels = {
         text: ["Translating text", "Reading your text and preparing the translation..."],
         file: ["Processing your file", "Extracting content and preparing the translation..."],
         youtube: ["Analyzing YouTube video", "Sending the public video to Gemini for analysis..."],
-        record: ["Processing your recording", "Transcribing your recorded speech..."]
+        record: ["Processing your recording", "Transcribing your recorded speech..."],
+        word: ["Translating Word document", "Translating text while preserving document structure and formatting..."]
     };
     const [title, detail] = labels[type] || labels.text;
     processingTitle.textContent = title;
     processingDetail.textContent = detail;
     steps.forEach((step, index) => step.classList.toggle("active", index === 0));
-    setTimeout(() => { if (!processingPanel.classList.contains("hidden")) { steps[1].classList.add("active"); processingDetail.textContent = "Detecting language and understanding the content..."; } }, 350);
-    setTimeout(() => { if (!processingPanel.classList.contains("hidden")) { steps[2].classList.add("active"); processingDetail.textContent = "Generating your translation..."; } }, 1100);
+    setTimeout(() => {
+        if (processingPanel.classList.contains("hidden")) return;
+        steps[1].classList.add("active");
+        processingDetail.textContent = type === "word" ? "Translating document text and keeping formatting intact..." : "Detecting language and understanding the content...";
+    }, 350);
+    setTimeout(() => {
+        if (processingPanel.classList.contains("hidden")) return;
+        steps[2].classList.add("active");
+        processingDetail.textContent = type === "word" ? "Creating your downloadable Word document..." : "Generating your translation...";
+    }, 1100);
 }
 
 function showResult(data) {
@@ -123,12 +136,10 @@ async function handleResponse(response) {
     if (!response.ok) throw new Error(data.error || "Request failed.");
     return data;
 }
-
 async function translateText() {
     const response = await fetch("/translate-text", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: textInput.value.trim(), source_language: sourceLang.value, target_language_name: targetLang.options[targetLang.selectedIndex].text})});
     showResult(await handleResponse(response));
 }
-
 async function translateFile(file) {
     const form = new FormData();
     form.append("file", file);
@@ -136,35 +147,62 @@ async function translateFile(file) {
     form.append("target_language_name", targetLang.options[targetLang.selectedIndex].text);
     showResult(await handleResponse(await fetch("/translate", {method: "POST", body: form})));
 }
-
 async function translateYouTube(url) {
     const response = await fetch("/translate-youtube", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({url, source_language: sourceLang.value, target_language_name: targetLang.options[targetLang.selectedIndex].text})});
     showResult(await handleResponse(response));
 }
+async function translateWord(file) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("source_language", sourceLang.value);
+    form.append("target_language_name", targetLang.options[targetLang.selectedIndex].text);
+    const response = await fetch("/translate-word", {method: "POST", body: form});
+    if (!response.ok) {
+        let message = `Word translation failed (${response.status}).`;
+        try { const data = await response.json(); message = data.error || message; } catch (_) {}
+        throw new Error(message);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^\"]+)"?/i);
+    const filename = match ? match[1] : "translated_document.docx";
+    const url = URL.createObjectURL(blob);
+    downloadWordBtn.onclick = () => {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    };
+    wordResult.classList.remove("hidden");
+    setTimeout(() => wordResult.scrollIntoView({behavior: "smooth", block: "start"}), 80);
+}
 
 translateBtn.addEventListener("click", async () => {
     resetOutput();
-    let type = activeMethod;
     try {
         if (activeMethod === "text") {
             if (!textInput.value.trim()) throw new Error("Enter some text to translate.");
-            type = "text";
+            setProcessing(true, "text");
+            await translateText();
         } else if (activeMethod === "file") {
             if (!fileUpload.files[0]) throw new Error("Choose a file to translate.");
-            type = "file";
+            setProcessing(true, "file");
+            await translateFile(fileUpload.files[0]);
         } else if (activeMethod === "youtube") {
             if (!youtubeInput.value.trim()) throw new Error("Paste a YouTube URL.");
-            type = "youtube";
-        } else if (activeMethod === "record") {
+            setProcessing(true, "youtube");
+            await translateYouTube(youtubeInput.value.trim());
+        } else if (activeMethod === "word") {
+            if (!wordUpload.files[0]) throw new Error("Choose a .docx Word document.");
+            setProcessing(true, "word");
+            await translateWord(wordUpload.files[0]);
+        } else {
             if (!recordedFile) throw new Error("Record your voice first.");
-            type = "record";
+            setProcessing(true, "record");
+            await translateFile(recordedFile);
         }
-
-        setProcessing(true, type);
-        if (activeMethod === "text") await translateText();
-        else if (activeMethod === "file") await translateFile(fileUpload.files[0]);
-        else if (activeMethod === "youtube") await translateYouTube(youtubeInput.value.trim());
-        else await translateFile(recordedFile);
     } catch (error) {
         showError(error.message);
     } finally {
@@ -194,11 +232,10 @@ recordBtn.addEventListener("click", async () => {
         } else {
             recorder.stop();
         }
-    } catch { showError("Microphone access was denied or is unavailable."); }
+    } catch (_) { showError("Microphone access was denied or is unavailable."); }
 });
 
 copyBtn.addEventListener("click", async () => { if (translation.value) await navigator.clipboard.writeText(translation.value); });
-
 playBtn.addEventListener("click", () => {
     if (!translation.value) return;
     speechSynthesis.cancel();
