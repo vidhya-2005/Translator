@@ -5,7 +5,6 @@ import wave
 
 import imageio_ffmpeg
 import requests
-from googletrans import LANGUAGES
 
 TTS_MODEL = "gemini-3.1-flash-tts-preview"
 
@@ -24,30 +23,9 @@ def convert_to_wav(input_path, output_path):
     _run(["-y", "-i", input_path, "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", output_path])
 
 
-def _language_code(language_name):
-    wanted = (language_name or "English").strip().lower()
-    for code, name in LANGUAGES.items():
-        if name.lower() == wanted or code.lower() == wanted:
-            return code
-    return "en"
-
-
-def _speech_language(code):
-    # Gemini accepts a language tag in speech_config. Prefer a regional tag
-    # where it is useful, while keeping common codes directly usable.
-    regional = {
-        "en": "en-US", "ta": "ta-IN", "hi": "hi-IN", "te": "te-IN",
-        "ml": "ml-IN", "kn": "kn-IN", "bn": "bn-IN", "mr": "mr-IN",
-        "gu": "gu-IN", "pa": "pa-IN", "ur": "ur-IN",
-    }
-    return regional.get(code, code)
-
-
 def generate_tts(text, api_key, output_path, language_name="English"):
     if not text.strip():
         raise ValueError("There is no translated text to generate audio from.")
-    code = _language_code(language_name)
-    language_tag = _speech_language(code)
     prompt = (
         f"Speak the following text naturally and clearly in {language_name}. "
         "Do not translate, summarize, or change the words. Use correct pronunciation "
@@ -55,12 +33,16 @@ def generate_tts(text, api_key, output_path, language_name="English"):
     )
     response = requests.post(
         "https://generativelanguage.googleapis.com/v1beta/interactions",
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key, "Api-Revision": "2026-05-20"},
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+            "Api-Revision": "2026-05-20",
+        },
         json={
             "model": TTS_MODEL,
             "input": prompt,
             "response_format": {"type": "audio"},
-            "generation_config": {"speech_config": [{"voice": "Kore", "language": language_tag}]},
+            "generation_config": {"speech_config": [{"voice": "Kore"}]},
         },
         timeout=180,
     )
@@ -74,6 +56,7 @@ def generate_tts(text, api_key, output_path, language_name="English"):
         data = response.json()
     except ValueError as exc:
         raise ValueError("Gemini TTS returned a non-JSON response.") from exc
+
     audio = data.get("output_audio")
     encoded = audio.get("data") if audio else None
     if not encoded:
@@ -86,6 +69,7 @@ def generate_tts(text, api_key, output_path, language_name="English"):
                 break
     if not encoded:
         raise ValueError("Gemini TTS returned no audio data.")
+
     raw = base64.b64decode(encoded)
     with wave.open(output_path, "wb") as wav:
         wav.setnchannels(1)
@@ -95,7 +79,14 @@ def generate_tts(text, api_key, output_path, language_name="English"):
 
 
 def video_with_translated_audio(video_path, translated_audio_path, output_path):
-    _run(["-y", "-i", video_path, "-i", translated_audio_path, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", output_path])
+    # Pad the translated track so a shorter TTS result never truncates the
+    # original video. -shortest then ends at the original video duration.
+    _run([
+        "-y", "-i", video_path, "-i", translated_audio_path,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac",
+        "-af", "apad", "-shortest", output_path,
+    ])
 
 
 def audio_as_mp3(wav_path, output_path):
