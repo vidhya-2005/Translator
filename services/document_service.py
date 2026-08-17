@@ -61,12 +61,6 @@ def _paragraphs(document):
 
 
 def translate_docx_preserving_format(path, output_path, translate_text_func, target_language, source_language="auto"):
-    """Translate all non-empty Word paragraphs in one batched Gemini call.
-
-    Translation is batched to avoid one API request per run/paragraph. Existing
-    formatting is retained by replacing text in the first non-empty run of each
-    paragraph and clearing the other text runs.
-    """
     document = Document(path)
     paragraphs = _paragraphs(document)
     candidates = []
@@ -74,13 +68,10 @@ def translate_docx_preserving_format(path, output_path, translate_text_func, tar
         text = "".join(run.text for run in paragraph.runs).strip()
         if text:
             candidates.append((paragraph, text))
-
     if not candidates:
         raise ValueError("No readable text found in the Word document.")
 
-    texts = [text for _, text in candidates]
-    translations = translate_segments(texts, target_language, source_language)
-
+    translations = translate_segments([text for _, text in candidates], target_language, source_language)
     for (paragraph, _), translated in zip(candidates, translations):
         runs = [run for run in paragraph.runs if run.text and run.text.strip()]
         if not runs:
@@ -88,7 +79,6 @@ def translate_docx_preserving_format(path, output_path, translate_text_func, tar
         runs[0].text = translated
         for run in runs[1:]:
             run.text = ""
-
     document.save(output_path)
 
 
@@ -104,22 +94,18 @@ def _visual_prompt(target_language, source_language="auto"):
 
 
 def _analyze_visual(path, mime_type, target_language, source_language):
-    result = _parse_json(_call({
-        "contents": [{"parts": [
-            {"text": _visual_prompt(target_language, source_language)},
-            {"inlineData": {"mimeType": mime_type, "data": encode_file(path)}}
-        ]}]
-    }, {"responseMimeType": "application/json"}))
-    return result
+    return _parse_json(_call({"contents": [{"parts": [
+        {"text": _visual_prompt(target_language, source_language)},
+        {"inlineData": {"mimeType": mime_type, "data": encode_file(path)}}
+    ]}]}, {"responseMimeType": "application/json"}))
 
 
 def _font(size):
-    candidates = [
+    for path in (
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for path in candidates:
+    ):
         if os.path.exists(path):
             return ImageFont.truetype(path, max(10, size))
     return ImageFont.load_default()
@@ -143,17 +129,24 @@ def _render_translated_image(image, analysis):
     return image
 
 
+def _result(analysis):
+    regions = analysis.get("regions", [])
+    return {
+        "detected_language_name": analysis.get("detected_language_name", "Unknown"),
+        "detected_language_code": analysis.get("detected_language_code", ""),
+        "transcription": "\n".join(str(r.get("text", "")) for r in regions if r.get("text")),
+        "translation": "\n".join(str(r.get("translation", "")) for r in regions if r.get("translation")),
+    }
+
+
 def translate_image_file(path, output_path, target_language, source_language, mime_type):
     analysis = _analyze_visual(path, mime_type, target_language, source_language)
     image = Image.open(path)
     translated = _render_translated_image(image, analysis)
-    translated.save(output_path, format="PNG" if mime_type == "image/png" else "JPEG", quality=95)
-    return {
-        "detected_language_name": analysis.get("detected_language_name", "Unknown"),
-        "detected_language_code": analysis.get("detected_language_code", ""),
-        "transcription": "\n".join(str(r.get("text", "")) for r in analysis.get("regions", []) if r.get("text")),
-        "translation": "\n".join(str(r.get("translation", "")) for r in analysis.get("regions", []) if r.get("translation")),
-    }
+    # The route always gives this function a .png output path, so the file
+    # contents must actually be PNG even when the source was JPG/JPEG.
+    translated.save(output_path, format="PNG", optimize=True)
+    return _result(analysis)
 
 
 def translate_pdf_file(path, output_path, target_language, source_language):
@@ -163,10 +156,10 @@ def translate_pdf_file(path, output_path, target_language, source_language):
     all_transcription, all_translation = [], []
     detected_name, detected_code = "Unknown", ""
     try:
-        for page in source:
+        for page_number, page in enumerate(source):
             pix = page.get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5), alpha=False)
             image = Image.open(BytesIO(pix.tobytes("png")))
-            temp_path = path + ".page.png"
+            temp_path = f"{path}.page-{page_number}.png"
             image.save(temp_path, format="PNG")
             try:
                 analysis = _analyze_visual(temp_path, "image/png", target_language, source_language)
@@ -180,9 +173,12 @@ def translate_pdf_file(path, output_path, target_language, source_language):
             page_out.insert_image(page_out.rect, stream=image_bytes.getvalue())
             detected_name = analysis.get("detected_language_name", detected_name)
             detected_code = analysis.get("detected_language_code", detected_code)
-            all_transcription.extend(str(r.get("text", "")) for r in analysis.get("regions", []) if r.get("text"))
-            all_translation.extend(str(r.get("translation", "")) for r in analysis.get("regions", []) if r.get("translation"))
-        output.save(output_path)
+            page_result = _result(analysis)
+            if page_result["transcription"]:
+                all_transcription.append(page_result["transcription"])
+            if page_result["translation"]:
+                all_translation.append(page_result["translation"])
+        output.save(output_path, garbage=4, deflate=True)
     finally:
         output.close()
         source.close()
