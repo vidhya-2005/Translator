@@ -5,6 +5,7 @@ import wave
 
 import imageio_ffmpeg
 import requests
+from googletrans import LANGUAGES
 
 TTS_MODEL = "gemini-3.1-flash-tts-preview"
 
@@ -23,9 +24,30 @@ def convert_to_wav(input_path, output_path):
     _run(["-y", "-i", input_path, "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", output_path])
 
 
+def _language_code(language_name):
+    wanted = (language_name or "English").strip().lower()
+    for code, name in LANGUAGES.items():
+        if name.lower() == wanted or code.lower() == wanted:
+            return code
+    return "en"
+
+
+def _speech_language(code):
+    # Gemini accepts a language tag in speech_config. Prefer a regional tag
+    # where it is useful, while keeping common codes directly usable.
+    regional = {
+        "en": "en-US", "ta": "ta-IN", "hi": "hi-IN", "te": "te-IN",
+        "ml": "ml-IN", "kn": "kn-IN", "bn": "bn-IN", "mr": "mr-IN",
+        "gu": "gu-IN", "pa": "pa-IN", "ur": "ur-IN",
+    }
+    return regional.get(code, code)
+
+
 def generate_tts(text, api_key, output_path, language_name="English"):
     if not text.strip():
         raise ValueError("There is no translated text to generate audio from.")
+    code = _language_code(language_name)
+    language_tag = _speech_language(code)
     prompt = (
         f"Speak the following text naturally and clearly in {language_name}. "
         "Do not translate, summarize, or change the words. Use correct pronunciation "
@@ -38,7 +60,7 @@ def generate_tts(text, api_key, output_path, language_name="English"):
             "model": TTS_MODEL,
             "input": prompt,
             "response_format": {"type": "audio"},
-            "generation_config": {"speech_config": [{"voice": "Kore"}]},
+            "generation_config": {"speech_config": [{"voice": "Kore", "language": language_tag}]},
         },
         timeout=180,
     )
