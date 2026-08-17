@@ -1,10 +1,15 @@
 import base64
+import html
 import os
+import tempfile
 from io import BytesIO
+
+import requests
 from docx import Document
-from pypdf import PdfReader
 from googletrans import LANGUAGES
 from PIL import Image, ImageDraw, ImageFont
+from pypdf import PdfReader
+
 from services.gemini_service import _call, _parse_json, translate_segments
 
 SUPPORTED_EXTENSIONS = {
@@ -14,6 +19,23 @@ SUPPORTED_EXTENSIONS = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".doc": None,
+}
+
+IMAGE_MODEL = "gemini-3.1-flash-image"
+FONT_BASE_URL = "https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf"
+FONT_MAP = {
+    "Tamil": "NotoSansTamil",
+    "Hindi": "NotoSansDevanagari",
+    "Marathi": "NotoSansDevanagari",
+    "Nepali": "NotoSansDevanagari",
+    "Bengali": "NotoSansBengali",
+    "Assamese": "NotoSansBengali",
+    "Gujarati": "NotoSansGujarati",
+    "Punjabi": "NotoSansGurmukhi",
+    "Kannada": "NotoSansKannada",
+    "Malayalam": "NotoSansMalayalam",
+    "Telugu": "NotoSansTelugu",
+    "Odia": "NotoSansOriya",
 }
 
 
@@ -60,7 +82,6 @@ def _paragraphs(document):
 
 
 def translate_docx_preserving_format(path, output_path, translate_text_func, target_language, source_language="auto"):
-    """Translate Word runs in batches while keeping each run's formatting."""
     document = Document(path)
     candidates = []
     for paragraph in _paragraphs(document):
@@ -81,7 +102,7 @@ def translate_docx_preserving_format(path, output_path, translate_text_func, tar
         raise ValueError("Word translation returned an incomplete result.")
 
     for (run, _), translated in zip(candidates, translations):
-        run.text = translated
+        run.text = str(translated)
 
     document.save(output_path)
 
@@ -104,7 +125,29 @@ def _analyze_visual(path, mime_type, target_language, source_language):
     ]}]}, {"responseMimeType": "application/json"}))
 
 
-def _font(size):
+def _font_cache_dir():
+    path = os.path.join(tempfile.gettempdir(), "translator-fonts")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _font(size, target_language="English", bold=False):
+    family = FONT_MAP.get(target_language)
+    if family:
+        filename = f"{family}-{'Bold' if bold else 'Regular'}.ttf"
+        cached = os.path.join(_font_cache_dir(), filename)
+        if not os.path.exists(cached):
+            url = f"{FONT_BASE_URL}/{family}/{filename}"
+            try:
+                response = requests.get(url, timeout=20)
+                response.raise_for_status()
+                with open(cached, "wb") as file:
+                    file.write(response.content)
+            except requests.RequestException:
+                pass
+        if os.path.exists(cached):
+            return ImageFont.truetype(cached, max(10, size))
+
     for path in (
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
@@ -115,21 +158,51 @@ def _font(size):
     return ImageFont.load_default()
 
 
-def _render_translated_image(image, analysis):
+def _fit_font(draw, text, box_width, box_height, target_language):
+    size = max(10, int(box_height * 0.72))
+    while size >= 10:
+        font = _font(size, target_language)
+        bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=max(1, int(size * 0.08)))
+        if bbox[2] - bbox[0] <= box_width * 0.94 and bbox[3] - bbox[1] <= box_height * 0.90:
+            return font
+        size -= 2
+    return _font(10, target_language)
+
+
+def _render_translated_image(image, analysis, target_language="English"):
     image = image.convert("RGB")
     draw = ImageDraw.Draw(image)
     width, height = image.size
+
     for region in analysis.get("regions", []):
         translation = str(region.get("translation", "")).strip()
         if not translation:
             continue
+
         x = int(float(region.get("x", 0)) / 1000 * width)
         y = int(float(region.get("y", 0)) / 1000 * height)
         w = max(10, int(float(region.get("width", 100)) / 1000 * width))
         h = max(10, int(float(region.get("height", 40)) / 1000 * height))
-        draw.rectangle((x, y, x + w, y + h), fill="white")
-        size = max(12, min(64, int(h * 0.65)))
-        draw.multiline_text((x + 4, y + 2), translation, fill="black", font=_font(size), spacing=2)
+        x2 = min(width, x + w)
+        y2 = min(height, y + h)
+
+        # Sample the surrounding pixels instead of assuming a white background.
+        samples = []
+        for sx, sy in ((x - 2, y + h // 2), (x2 + 2, y + h // 2), (x + w // 2, y - 2), (x + w // 2, y2 + 2)):
+            if 0 <= sx < width and 0 <= sy < height:
+                samples.append(image.getpixel((sx, sy)))
+        background = tuple(sum(pixel[i] for pixel in samples) // len(samples) for i in range(3)) if samples else (255, 255, 255)
+
+        draw.rectangle((x, y, x2, y2), fill=background)
+        font = _fit_font(draw, translation, max(10, x2 - x), max(10, y2 - y), target_language)
+        draw.multiline_text(
+            (x + 3, y + 2),
+            translation,
+            fill=(0, 0, 0),
+            font=font,
+            spacing=max(1, int(font.size * 0.08)),
+            align="left",
+        )
     return image
 
 
@@ -143,10 +216,98 @@ def _result(analysis):
     }
 
 
+def _aspect_ratio(width, height):
+    ratios = {
+        "1:1": 1.0,
+        "1:4": 0.25,
+        "4:1": 4.0,
+        "1:8": 0.125,
+        "8:1": 8.0,
+        "2:3": 2 / 3,
+        "3:2": 3 / 2,
+        "3:4": 3 / 4,
+        "4:3": 4 / 3,
+        "4:5": 4 / 5,
+        "5:4": 5 / 4,
+        "9:16": 9 / 16,
+        "16:9": 16 / 9,
+        "21:9": 21 / 9,
+    }
+    value = width / height
+    return min(ratios, key=lambda key: abs(ratios[key] - value))
+
+
+def _gemini_edit_image(path, mime_type, target_language):
+    image_data = encode_file(path)
+    with Image.open(path) as source:
+        width, height = source.size
+    prompt = (
+        f"Translate ONLY the visible human-readable text in this image into {target_language}. "
+        "This is an image-editing task, not a redesign. Preserve the original image as closely as possible. "
+        "Keep the exact composition, objects, people, illustrations, background, colors, borders, spacing, "
+        "decorations, lighting, perspective and overall layout unchanged. Change ONLY the written text. "
+        "Keep each translated text in the same location and approximately the same size, weight, alignment "
+        "and visual style as the original. Do not add, remove, invent, summarize or reorder content. "
+        "Render the requested script with proper Unicode glyphs; NEVER use square boxes or missing-glyph symbols."
+    )
+    response = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        headers={"Content-Type": "application/json", "x-goog-api-key": os.environ.get("GEMINI_API_KEY", "")},
+        json={
+            "model": IMAGE_MODEL,
+            "input": [
+                {"type": "image", "mime_type": mime_type, "data": image_data},
+                {"type": "text", "text": prompt},
+            ],
+            "response_format": {
+                "type": "image",
+                "mime_type": "image/png",
+                "aspect_ratio": _aspect_ratio(width, height),
+                "image_size": "1K",
+            },
+        },
+        timeout=180,
+    )
+    if response.status_code not in (200, 201):
+        try:
+            message = response.json().get("error", {}).get("message", response.text)
+        except ValueError:
+            message = response.text
+        raise ValueError(f"Gemini image editing error ({response.status_code}): {message}")
+
+    data = response.json()
+    encoded = None
+    image = data.get("output_image")
+    if image:
+        encoded = image.get("data")
+    if not encoded:
+        for step in data.get("steps", []):
+            if step.get("type") != "model_output":
+                continue
+            for item in step.get("content", []):
+                if item.get("type") == "image" and item.get("data"):
+                    encoded = item["data"]
+                    break
+            if encoded:
+                break
+    if not encoded:
+        raise ValueError("Gemini image editing returned no image output.")
+
+    edited = Image.open(BytesIO(base64.b64decode(encoded))).convert("RGB")
+    if edited.size != (width, height):
+        edited = edited.resize((width, height), Image.Resampling.LANCZOS)
+    return edited
+
+
 def translate_image_file(path, output_path, target_language, source_language, mime_type):
     analysis = _analyze_visual(path, mime_type, target_language, source_language)
-    image = Image.open(path)
-    translated = _render_translated_image(image, analysis)
+    try:
+        translated = _gemini_edit_image(path, mime_type, target_language)
+    except Exception:
+        # Keep a deterministic local fallback. The target-script font is downloaded
+        # from the Noto project when it is not already installed on the server.
+        translated = _render_translated_image(Image.open(path), analysis, target_language)
+
     if mime_type == "image/jpeg":
         translated.save(output_path, format="JPEG", quality=95, optimize=True)
     else:
@@ -155,7 +316,6 @@ def translate_image_file(path, output_path, target_language, source_language, mi
 
 
 def translate_pdf_file(path, output_path, target_language, source_language):
-    """Translate text-based PDFs in place, preserving the original page artwork."""
     import pymupdf
 
     doc = pymupdf.open(path)
@@ -179,10 +339,7 @@ def translate_pdf_file(path, output_path, target_language, source_language):
                 ).strip()
                 if not text:
                     continue
-                first_span = next(
-                    (span for line in lines for span in line.get("spans", []) if span.get("text")),
-                    {},
-                )
+                first_span = next((span for line in lines for span in line.get("spans", []) if span.get("text")), {})
                 text_blocks.append({
                     "rect": pymupdf.Rect(block["bbox"]),
                     "text": text,
@@ -202,7 +359,7 @@ def translate_pdf_file(path, output_path, target_language, source_language):
                 finally:
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
-                translated = _render_translated_image(image, analysis)
+                translated = _render_translated_image(image, analysis, target_language)
                 image_bytes = BytesIO()
                 translated.save(image_bytes, format="PNG")
                 page.clean_contents()
@@ -233,21 +390,16 @@ def translate_pdf_file(path, output_path, target_language, source_language):
                 flags = block["flags"]
                 weight = "bold" if flags & (1 << 4) else "normal"
                 style = "italic" if flags & (1 << 1) else "normal"
-                angle = 0
                 dx, dy = block["dir"]
-                if abs(dx) < 0.01 and dy > 0:
-                    angle = 90
-                elif abs(dx) < 0.01 and dy < 0:
-                    angle = 270
-                elif dx < 0:
-                    angle = 180
-                html = (
+                angle = 90 if abs(dx) < 0.01 and dy > 0 else 270 if abs(dx) < 0.01 else 180 if dx < 0 else 0
+                html_text = html.escape(translated).replace("\n", "<br>")
+                html_box = (
                     f'<div style="font-family:sans-serif;font-size:{block["size"]:.2f}pt;'
                     f'font-weight:{weight};font-style:{style};color:rgb('
                     f'{int(rgb[0]*255)},{int(rgb[1]*255)},{int(rgb[2]*255)});">'
-                    f'{_html_escape(translated).replace(chr(10), "<br>")}</div>'
+                    f'{html_text}</div>'
                 )
-                page.insert_htmlbox(block["rect"], html, rotate=angle, overlay=True)
+                page.insert_htmlbox(block["rect"], html_box, rotate=angle, overlay=True)
                 all_transcription.append(block["text"])
                 all_translation.append(translated)
 
@@ -261,14 +413,3 @@ def translate_pdf_file(path, output_path, target_language, source_language):
         "transcription": "\n".join(all_transcription),
         "translation": "\n".join(all_translation),
     }
-
-
-def _html_escape(text):
-    return (
-        str(text)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#39;")
-    )
