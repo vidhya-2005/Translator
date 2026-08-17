@@ -1,11 +1,9 @@
 Flask
 requests
 googletrans==4.0.0rc1
-yt-dlp
 gunicorn
 pypdf
 python-docx
-youtube-transcript-api==1.2.4
 imageio-ffmpeg
 PyMuPDF
 Pillow
