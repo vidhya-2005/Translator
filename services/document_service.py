@@ -147,17 +147,15 @@ def translate_image_file(path, output_path, target_language, source_language, mi
     analysis = _analyze_visual(path, mime_type, target_language, source_language)
     image = Image.open(path)
     translated = _render_translated_image(image, analysis)
-    translated.save(output_path, format="PNG", optimize=True)
+    if mime_type == "image/jpeg":
+        translated.save(output_path, format="JPEG", quality=95, optimize=True)
+    else:
+        translated.save(output_path, format="PNG", optimize=True)
     return _result(analysis)
 
 
 def translate_pdf_file(path, output_path, target_language, source_language):
-    """Translate text-based PDFs in place, preserving the original page artwork.
-
-    Scanned/image-only pages fall back to the existing visual translation path.
-    Native PDF text is removed without touching images/vector graphics, then the
-    translated text is inserted into the original text boxes.
-    """
+    """Translate text-based PDFs in place, preserving the original page artwork."""
     import pymupdf
 
     doc = pymupdf.open(path)
@@ -195,8 +193,6 @@ def translate_pdf_file(path, output_path, target_language, source_language):
                 })
 
             if not text_blocks:
-                # Scanned PDF page: preserve the page size and use the visual
-                # translator only for this page.
                 pix = page.get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5), alpha=False)
                 image = Image.open(BytesIO(pix.tobytes("png")))
                 temp_path = f"{path}.page-{page.number}.png"
@@ -220,19 +216,12 @@ def translate_pdf_file(path, output_path, target_language, source_language):
                     all_translation.append(page_result["translation"])
                 continue
 
-            translations = translate_segments(
-                [block["text"] for block in text_blocks],
-                target_language,
-                source_language,
-            )
+            translations = translate_segments([block["text"] for block in text_blocks], target_language, source_language)
             if len(translations) != len(text_blocks):
                 raise ValueError("PDF translation returned an incomplete result.")
 
             for block in text_blocks:
-                rect = block["rect"]
-                # Keep a tiny margin so glyph edges are removed cleanly while
-                # not touching nearby images or vector artwork.
-                page.add_redact_annot(rect + (-0.5, -0.5, 0.5, 0.5), fill=False, cross_out=False)
+                page.add_redact_annot(block["rect"] + (-0.5, -0.5, 0.5, 0.5), fill=False, cross_out=False)
             page.apply_redactions(images=0, graphics=0)
 
             for block, translated in zip(text_blocks, translations):
@@ -240,11 +229,7 @@ def translate_pdf_file(path, output_path, target_language, source_language):
                 if not translated:
                     continue
                 color = block["color"]
-                rgb = (
-                    ((color >> 16) & 255) / 255,
-                    ((color >> 8) & 255) / 255,
-                    (color & 255) / 255,
-                )
+                rgb = (((color >> 16) & 255) / 255, ((color >> 8) & 255) / 255, (color & 255) / 255)
                 flags = block["flags"]
                 weight = "bold" if flags & (1 << 4) else "normal"
                 style = "italic" if flags & (1 << 1) else "normal"
@@ -256,28 +241,13 @@ def translate_pdf_file(path, output_path, target_language, source_language):
                     angle = 270
                 elif dx < 0:
                     angle = 180
-
-                # HTML boxes provide Unicode shaping and automatic font
-                # fallback for scripts such as Tamil and Devanagari.
                 html = (
                     f'<div style="font-family:sans-serif;font-size:{block["size"]:.2f}pt;'
                     f'font-weight:{weight};font-style:{style};color:rgb('
                     f'{int(rgb[0]*255)},{int(rgb[1]*255)},{int(rgb[2]*255)});">'
                     f'{_html_escape(translated).replace(chr(10), "<br>")}</div>'
                 )
-                rc = page.insert_htmlbox(rect, html, rotate=angle, overlay=True)
-                if rc[0] < 0:
-                    # If the translated text is longer than the original box,
-                    # retry with a smaller size rather than silently dropping it.
-                    for factor in (0.85, 0.7, 0.55):
-                        html_small = html.replace(
-                            f'font-size:{block["size"]:.2f}pt',
-                            f'font-size:{max(6, block["size"] * factor):.2f}pt',
-                        )
-                        rc = page.insert_htmlbox(rect, html_small, rotate=angle, overlay=True)
-                        if rc[0] >= 0:
-                            break
-
+                page.insert_htmlbox(block["rect"], html, rotate=angle, overlay=True)
                 all_transcription.append(block["text"])
                 all_translation.append(translated)
 
