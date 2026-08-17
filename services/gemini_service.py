@@ -9,8 +9,7 @@ def _url():
     key = current_app.config["API_KEY"]
     if not key:
         raise ValueError("GEMINI_API_KEY is not configured.")
-    model = current_app.config["GEMINI_MODEL"]
-    return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    return f"https://generativelanguage.googleapis.com/v1beta/models/{current_app.config['GEMINI_MODEL']}:generateContent?key={key}"
 
 
 def _call(payload, generation_config=None):
@@ -23,12 +22,12 @@ def _call(payload, generation_config=None):
             message = response.json().get("error", {}).get("message", response.text)
         except ValueError:
             message = response.text
-        raise ValueError(f"Gemini API error: {message}")
-    data = response.json()
+        raise ValueError(f"Gemini API error ({response.status_code}): {message}")
     try:
+        data = response.json()
         return data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError):
-        raise ValueError("Gemini returned an unexpected response.")
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("Gemini returned an unexpected response.") from exc
 
 
 def _parse_json(text):
@@ -38,14 +37,13 @@ def _parse_json(text):
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Could not parse Gemini JSON response: {exc}")
+        raise ValueError(f"Could not parse Gemini JSON response: {exc}") from exc
 
 
 def _translation_prompt(target_language_name, source_language="auto"):
     if source_language == "auto":
         return f"Detect the source language and translate the supplied content to {target_language_name}. Return ONLY JSON with keys: detected_language_name, transcription, translation."
-    source_name = LANGUAGES.get(source_language, source_language)
-    return f"The source language is {source_name}. Translate the supplied content to {target_language_name}. Return ONLY JSON with keys: detected_language_name, transcription, translation."
+    return f"The source language is {LANGUAGES.get(source_language, source_language)}. Translate the supplied content to {target_language_name}. Return ONLY JSON with keys: detected_language_name, transcription, translation."
 
 
 def translate_text(text, target_language_name, source_language="auto"):
@@ -53,21 +51,24 @@ def translate_text(text, target_language_name, source_language="auto"):
 
 
 def translate_segments(segments, target_language_name, source_language="auto"):
-    """Translate many text segments in one request, preserving their order."""
     if not segments:
         return []
     source = "Detect the source language automatically." if source_language == "auto" else f"The source language is {LANGUAGES.get(source_language, source_language)}."
-    items = "\n".join(f"{i}: {json.dumps(text, ensure_ascii=False)}" for i, text in enumerate(segments))
-    prompt = (
-        "Translate each numbered text segment independently. "
-        f"{source} Translate to {target_language_name}. "
-        "Return ONLY a JSON array of strings in exactly the same order and count as the input. "
-        "Do not merge, omit, explain, or renumber segments.\n\n" + items
-    )
-    result = _parse_json(_call({"contents": [{"parts": [{"text": prompt}]}]}, {"responseMimeType": "application/json"}))
-    if not isinstance(result, list) or len(result) != len(segments):
-        raise ValueError("Gemini returned an invalid number of translated Word segments.")
-    return [str(item) for item in result]
+    translated_all = []
+    for start in range(0, len(segments), 20):
+        batch = segments[start:start + 20]
+        items = "\n".join(f"{i}: {json.dumps(text, ensure_ascii=False)}" for i, text in enumerate(batch))
+        prompt = (
+            "Translate each numbered text segment independently. "
+            f"{source} Translate to {target_language_name}. "
+            "Return ONLY a JSON array of strings in exactly the same order and count as the input. "
+            "Do not merge, omit, explain, or renumber segments.\n\n" + items
+        )
+        result = _parse_json(_call({"contents": [{"parts": [{"text": prompt}]}]}, {"responseMimeType": "application/json"}))
+        if not isinstance(result, list) or len(result) != len(batch):
+            raise ValueError(f"Gemini returned an invalid number of translated Word segments in batch {start // 20 + 1}.")
+        translated_all.extend(str(item) for item in result)
+    return translated_all
 
 
 def translate_document(path, mime_type, target_language_name, source_language="auto"):
@@ -83,15 +84,9 @@ def translate_youtube(url, target_language_name, source_language="auto"):
     model = current_app.config["GEMINI_MODEL"]
     endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions"
     source_instruction = "Detect the spoken language automatically." if source_language == "auto" else f"The spoken language is {LANGUAGES.get(source_language, source_language)}."
-    prompt = (
-        "Analyze this public YouTube video. "
-        f"{source_instruction} Transcribe the spoken content and translate it into {target_language_name}. "
-        "Do not summarize. Return ONLY valid JSON with no markdown or code fences using exactly these keys: "
-        "detected_language_name, detected_language_code, transcription, translation."
-    )
-    payload = {"model": model, "input": [{"type": "text", "text": prompt}, {"type": "video", "uri": url}]}
+    prompt = f"Analyze this public YouTube video. {source_instruction} Transcribe the spoken content and translate it into {target_language_name}. Do not summarize. Return ONLY valid JSON with no markdown using exactly these keys: detected_language_name, detected_language_code, transcription, translation."
     try:
-        response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json", "x-goog-api-key": key}, timeout=max(current_app.config["GEMINI_TIMEOUT"], 180))
+        response = requests.post(endpoint, json={"model": model, "input": [{"type": "text", "text": prompt}, {"type": "video", "uri": url}]}, headers={"Content-Type": "application/json", "x-goog-api-key": key}, timeout=max(current_app.config["GEMINI_TIMEOUT"], 180))
     except requests.RequestException as exc:
         raise ValueError(f"Gemini YouTube request failed: {exc}") from exc
     if response.status_code not in (200, 201):
@@ -101,15 +96,10 @@ def translate_youtube(url, target_language_name, source_language="auto"):
         except ValueError:
             message = response.text
         raise ValueError(f"Gemini YouTube error ({response.status_code}): {message}")
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise ValueError("Gemini returned a non-JSON YouTube response.") from exc
+    data = response.json()
     output_text = data.get("output_text")
     if not output_text:
         for step in data.get("steps", []):
-            if step.get("type") != "model_output":
-                continue
             for item in step.get("content", []):
                 if item.get("type") == "text" and item.get("text"):
                     output_text = item["text"]
@@ -127,8 +117,7 @@ def process_audio(audio_path, target_language_name, source_language="auto"):
     if source_language == "auto":
         prompt = "Transcribe this audio and identify its language. Return ONLY JSON with keys: language_code and transcription."
     else:
-        source_name = LANGUAGES.get(source_language, source_language)
-        prompt = f"The audio is in {source_name}. Transcribe it. Return ONLY JSON with language_code='{source_language}' and transcription."
+        prompt = f"The audio is in {LANGUAGES.get(source_language, source_language)}. Transcribe it. Return ONLY JSON with language_code='{source_language}' and transcription."
     result = _parse_json(_call({"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "audio/wav", "data": encoded}}]}]}, {"responseMimeType": "application/json"}))
     code = result.get("language_code", "en")
     transcription = result.get("transcription", "")
