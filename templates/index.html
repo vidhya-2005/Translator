@@ -47,8 +47,6 @@
 
     <section id="download-result" class="document-result hidden"><div><div class="eyebrow">FILE READY</div><h2 id="download-title">Translated file ready</h2><p id="download-detail">Your translated file is ready to download.</p></div><a id="download-result-btn" class="translate-btn download-link" href="#" download>↓ Download translated file</a></section>
 
-    <section id="word-result" class="document-result hidden"><div><div class="eyebrow">DOCUMENT READY</div><h2>Translated Word document</h2><p>Your document structure and formatting have been retained.</p></div><button id="download-word-btn" class="translate-btn" type="button">↓ Download translated Word file</button></section>
-
     <section id="results-section" class="results-section hidden"><div class="results-header"><div><div class="eyebrow">TRANSLATION COMPLETE</div><h2>Your result</h2><p id="detected-language">Detected language: —</p></div><div class="result-actions"><button id="copy-btn" class="secondary-btn" type="button">Copy</button><button id="play-btn" class="secondary-btn" type="button" disabled>▶ Play</button></div></div><div class="result-grid"><article class="result-card"><div class="result-label">TRANSCRIPTION / EXTRACTED TEXT</div><textarea id="transcription" rows="9" readonly placeholder="Your detected or extracted text will appear here..."></textarea></article><article class="result-card translation-result"><div class="result-label">TRANSLATION</div><textarea id="translation" rows="9" readonly placeholder="Your translation will appear here..."></textarea></article></div></section>
 </main>
 <script>const LANGUAGES = {{ languages|tojson }};</script>
