@@ -1,8 +1,8 @@
 import os
 import uuid
 from flask import Blueprint, jsonify, request, send_file, after_this_request
-from services.gemini_service import translate_text, translate_document, process_audio, translate_youtube
-from services.media_output_service import convert_to_wav, generate_tts, video_with_translated_audio, audio_as_mp3
+from services.gemini_service import translate_text, translate_document, process_media, translate_youtube
+from services.media_output_service import generate_tts, video_with_translated_audio, audio_as_mp3
 from services.document_service import get_file_type, extract_docx_text, translate_docx_preserving_format
 from services.document_service import translate_image_file as translate_image, translate_pdf_file as translate_pdf
 from utils.validation import validate_source_target
@@ -67,7 +67,6 @@ def text_translation():
 
 @translation_bp.post("/translate")
 def file_translation():
-    """Compatibility endpoint for ordinary file extraction/translation."""
     input_path = wav_path = None
     try:
         if "file" not in request.files:
@@ -85,11 +84,9 @@ def file_translation():
         token = uuid.uuid4().hex
         tmp = _tmp_dir()
         input_path = os.path.join(tmp, f"{token}{extension or os.path.splitext(file.filename)[1].lower()}")
-        wav_path = os.path.join(tmp, f"{token}.wav")
         file.save(input_path)
         if audio_video:
-            convert_to_wav(input_path, wav_path)
-            return jsonify(process_audio(wav_path, target, source))
+            return jsonify(process_media(input_path, file.mimetype or "application/octet-stream", target, source))
         if extension == ".docx":
             text = extract_docx_text(input_path)
             if not text:
@@ -101,17 +98,21 @@ def file_translation():
     except Exception as exc:
         return _error_response(exc)
     finally:
-        for path in (input_path, wav_path):
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+        if input_path and os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+            except OSError:
+                pass
+        if wav_path and os.path.exists(wav_path):
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
 
 
 @translation_bp.post("/translate-media")
 def translate_media():
-    input_path = wav_path = tts_path = output_path = None
+    input_path = tts_path = output_path = None
     try:
         if "file" not in request.files:
             return jsonify(error="No media file provided."), 400
@@ -129,12 +130,13 @@ def translate_media():
         tmp = _tmp_dir()
         ext = os.path.splitext(file.filename)[1].lower() or (".mp4" if is_video else ".wav")
         input_path = os.path.join(tmp, f"{token}{ext}")
-        wav_path = os.path.join(tmp, f"{token}_source.wav")
         tts_path = os.path.join(tmp, f"{token}_translated.wav")
         output_path = os.path.join(tmp, f"{token}_output.{ 'mp4' if is_video else 'mp3' }")
         file.save(input_path)
-        convert_to_wav(input_path, wav_path)
-        result = process_audio(wav_path, target, source)
+
+        # Gemini now receives the original media directly. Small files use
+        # inline input; larger files use the Gemini Files API automatically.
+        result = process_media(input_path, mimetype, target, source)
         if not result.get("translation"):
             raise ValueError("No translatable speech was detected in the uploaded media.")
         api_key = os.environ.get("GEMINI_API_KEY")
@@ -151,7 +153,7 @@ def translate_media():
     except Exception as exc:
         return _error_response(exc)
     finally:
-        for path in (input_path, wav_path, tts_path, output_path):
+        for path in (input_path, tts_path, output_path):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
