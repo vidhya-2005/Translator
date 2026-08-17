@@ -50,24 +50,43 @@ def translate_text(text, target_language_name, source_language="auto"):
     return _parse_json(_call({"contents": [{"parts": [{"text": _translation_prompt(target_language_name, source_language)}, {"text": text}]}]}, {"responseMimeType": "application/json"}))
 
 
+def _translate_segment_batch(segments, target_language_name, source_language):
+    source = "Detect the source language automatically." if source_language == "auto" else f"The source language is {LANGUAGES.get(source_language, source_language)}."
+    items = "\n".join(f"{i}: {json.dumps(text, ensure_ascii=False)}" for i, text in enumerate(segments))
+    prompt = (
+        "Translate each numbered text segment independently. "
+        f"{source} Translate to {target_language_name}. "
+        "Return ONLY a JSON array of strings in exactly the same order and count as the input. "
+        "Do not merge, omit, explain, or renumber segments.\n\n" + items
+    )
+    result = _parse_json(_call({"contents": [{"parts": [{"text": prompt}]}]}, {"responseMimeType": "application/json"}))
+    if not isinstance(result, list) or len(result) != len(segments):
+        raise ValueError("Gemini returned an invalid number of translated Word segments.")
+    return [str(item) for item in result]
+
+
 def translate_segments(segments, target_language_name, source_language="auto"):
+    """Translate Word segments in bounded batches, with a per-batch fallback."""
     if not segments:
         return []
-    source = "Detect the source language automatically." if source_language == "auto" else f"The source language is {LANGUAGES.get(source_language, source_language)}."
     translated_all = []
-    for start in range(0, len(segments), 20):
-        batch = segments[start:start + 20]
-        items = "\n".join(f"{i}: {json.dumps(text, ensure_ascii=False)}" for i, text in enumerate(batch))
-        prompt = (
-            "Translate each numbered text segment independently. "
-            f"{source} Translate to {target_language_name}. "
-            "Return ONLY a JSON array of strings in exactly the same order and count as the input. "
-            "Do not merge, omit, explain, or renumber segments.\n\n" + items
-        )
-        result = _parse_json(_call({"contents": [{"parts": [{"text": prompt}]}]}, {"responseMimeType": "application/json"}))
-        if not isinstance(result, list) or len(result) != len(batch):
-            raise ValueError(f"Gemini returned an invalid number of translated Word segments in batch {start // 20 + 1}.")
-        translated_all.extend(str(item) for item in result)
+    batch_size = 20
+    for start in range(0, len(segments), batch_size):
+        batch = segments[start:start + batch_size]
+        try:
+            translated_all.extend(_translate_segment_batch(batch, target_language_name, source_language))
+        except Exception as batch_error:
+            fallback = []
+            try:
+                for text in batch:
+                    result = translate_text(text, target_language_name, source_language)
+                    translated = str(result.get("translation", "")).strip()
+                    if not translated:
+                        raise ValueError("Gemini returned empty translated text.")
+                    fallback.append(translated)
+            except Exception as fallback_error:
+                raise ValueError(f"Word translation failed for batch {start // batch_size + 1}: {batch_error}; fallback failed: {fallback_error}") from fallback_error
+            translated_all.extend(fallback)
     return translated_all
 
 
@@ -96,7 +115,10 @@ def translate_youtube(url, target_language_name, source_language="auto"):
         except ValueError:
             message = response.text
         raise ValueError(f"Gemini YouTube error ({response.status_code}): {message}")
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise ValueError("Gemini returned a non-JSON YouTube response.") from exc
     output_text = data.get("output_text")
     if not output_text:
         for step in data.get("steps", []):
