@@ -66,7 +66,6 @@ def _translate_segment_batch(segments, target_language_name, source_language):
 
 
 def translate_segments(segments, target_language_name, source_language="auto"):
-    """Translate Word segments in bounded batches, with a per-batch fallback."""
     if not segments:
         return []
     translated_all = []
@@ -107,8 +106,8 @@ def translate_youtube(url, target_language_name, source_language="auto"):
     payload = {
         "model": model,
         "input": [
-            {"type": "video", "uri": url, "mime_type": "video/mp4"},
             {"type": "text", "text": prompt},
+            {"type": "video", "uri": url},
         ],
     }
     try:
