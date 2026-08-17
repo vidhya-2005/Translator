@@ -4,8 +4,8 @@ from flask import Blueprint, jsonify, request, send_file, after_this_request
 from services.gemini_service import translate_text, translate_document, process_audio, translate_youtube
 from services.audio_service import convert_to_wav
 from services.media_output_service import convert_to_wav as convert_media_to_wav, generate_tts, video_with_translated_audio, audio_as_mp3
-from services.visual_document_service import translate_image, translate_pdf
 from services.document_service import get_file_type, extract_docx_text, translate_docx_preserving_format
+from services.visual_document_service import translate_image, translate_pdf
 from utils.validation import validate_source_target
 
 translation_bp = Blueprint("translation", __name__)
@@ -109,10 +109,7 @@ def file_translation():
 
 @translation_bp.post("/translate-media")
 def translate_media():
-    input_path = None
-    wav_path = None
-    tts_path = None
-    output_path = None
+    input_path = wav_path = tts_path = output_path = None
     try:
         if "file" not in request.files:
             return jsonify(error="No media file provided."), 400
@@ -123,8 +120,7 @@ def translate_media():
         target = request.form.get("target_language_name", "English")
         validate_source_target(source, target)
         mimetype = file.mimetype or "application/octet-stream"
-        is_video = mimetype.startswith("video/")
-        is_audio = mimetype.startswith("audio/")
+        is_video, is_audio = mimetype.startswith("video/"), mimetype.startswith("audio/")
         if not (is_video or is_audio):
             return jsonify(error="This endpoint accepts audio or video files."), 400
         token = uuid.uuid4().hex
@@ -135,42 +131,34 @@ def translate_media():
         tts_path = os.path.join(tmp, f"{token}_translated.wav")
         output_path = os.path.join(tmp, f"{token}_output.{ 'mp4' if is_video else 'mp3' }")
         file.save(input_path)
-
         convert_media_to_wav(input_path, wav_path)
         result = process_audio(wav_path, target, source)
         if not result.get("translation"):
             raise ValueError("No translatable speech was detected in the uploaded media.")
-
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY is not configured.")
         generate_tts(result["translation"], api_key, tts_path)
-
         if is_video:
             video_with_translated_audio(input_path, tts_path, output_path)
-            download_name = f"{os.path.splitext(file.filename)[0]}_translated.mp4"
-            media = _media_download_response(output_path, download_name, "video/mp4")
+            media = _media_download_response(output_path, f"{os.path.splitext(file.filename)[0]}_translated.mp4", "video/mp4")
         else:
             audio_as_mp3(tts_path, output_path)
-            download_name = f"{os.path.splitext(file.filename)[0]}_translated.mp3"
-            media = _media_download_response(output_path, download_name, "audio/mpeg")
-
+            media = _media_download_response(output_path, f"{os.path.splitext(file.filename)[0]}_translated.mp3", "audio/mpeg")
         return jsonify({**result, **media})
     except Exception as exc:
         return _error_response(exc)
     finally:
         for path in (input_path, wav_path, tts_path, output_path):
             try:
-                if path and os.path.exists(path):
-                    os.remove(path)
+                if path and os.path.exists(path): os.remove(path)
             except OSError:
                 pass
 
 
 @translation_bp.post("/translate-visual")
 def translate_visual():
-    input_path = None
-    output_path = None
+    input_path = output_path = None
     try:
         if "file" not in request.files:
             return jsonify(error="No image or PDF provided."), 400
@@ -193,30 +181,26 @@ def translate_visual():
         output_path = os.path.join(tmp, f"{token}_translated{output_ext}")
         file.save(input_path)
         if ext == ".pdf":
-            translate_pdf(input_path, output_path, target, api_key)
-            name = f"{os.path.splitext(file.filename)[0]}_translated.pdf"
-            mime = "application/pdf"
+            result = translate_pdf(input_path, output_path, target, api_key, source)
+            name, mime = f"{os.path.splitext(file.filename)[0]}_translated.pdf", "application/pdf"
         else:
-            translate_image(input_path, output_path, target, api_key)
-            name = f"{os.path.splitext(file.filename)[0]}_translated.png"
-            mime = "image/png"
+            result = translate_image(input_path, output_path, target, api_key, source)
+            name, mime = f"{os.path.splitext(file.filename)[0]}_translated.png", "image/png"
         media = _media_download_response(output_path, name, mime)
-        return jsonify({**media, "translation": "Visual document translated."})
+        return jsonify({**result, **media})
     except Exception as exc:
         return _error_response(exc)
     finally:
         for path in (input_path, output_path):
             try:
-                if path and os.path.exists(path):
-                    os.remove(path)
+                if path and os.path.exists(path): os.remove(path)
             except OSError:
                 pass
 
 
 @translation_bp.post("/translate-word")
 def word_translation():
-    input_path = None
-    output_path = None
+    input_path = output_path = None
     try:
         if "file" not in request.files:
             return jsonify(error="No Word document provided."), 400
@@ -238,19 +222,16 @@ def word_translation():
         def cleanup(response):
             for path in (input_path, output_path):
                 try:
-                    if path and os.path.exists(path):
-                        os.remove(path)
+                    if path and os.path.exists(path): os.remove(path)
                 except OSError:
                     pass
             return response
-        original_name = os.path.splitext(os.path.basename(file.filename))[0]
-        download_name = f"{original_name}_translated.docx"
+        download_name = f"{os.path.splitext(os.path.basename(file.filename))[0]}_translated.docx"
         return send_file(output_path, as_attachment=True, download_name=download_name, mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     except Exception as exc:
         for path in (input_path, output_path):
             try:
-                if path and os.path.exists(path):
-                    os.remove(path)
+                if path and os.path.exists(path): os.remove(path)
             except OSError:
                 pass
         return _error_response(exc)
@@ -268,4 +249,34 @@ def youtube_translation():
         validate_source_target(source, target)
         return jsonify(translate_youtube(url, target, source))
     except Exception as exc:
+        return _error_response(exc)
+
+
+@translation_bp.post("/tts")
+def text_to_speech():
+    output_path = None
+    try:
+        data = request.get_json(silent=True) or {}
+        text = (data.get("text") or "").strip()
+        if not text:
+            return jsonify(error="No text provided for speech."), 400
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY is not configured.")
+        token = uuid.uuid4().hex
+        output_path = os.path.join(_tmp_dir(), f"{token}.wav")
+        generate_tts(text, api_key, output_path)
+        response = send_file(output_path, mimetype="audio/wav", as_attachment=False)
+        @after_this_request
+        def cleanup(_response):
+            try:
+                if os.path.exists(output_path): os.remove(output_path)
+            except OSError:
+                pass
+            return _response
+        return response
+    except Exception as exc:
+        if output_path and os.path.exists(output_path):
+            try: os.remove(output_path)
+            except OSError: pass
         return _error_response(exc)
