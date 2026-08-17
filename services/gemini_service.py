@@ -13,7 +13,10 @@ def _url():
     return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
 
 
-def _call(payload):
+def _call(payload, generation_config=None):
+    if generation_config:
+        payload = dict(payload)
+        payload["generationConfig"] = generation_config
     response = requests.post(_url(), json=payload, headers={"Content-Type": "application/json"}, timeout=current_app.config["GEMINI_TIMEOUT"])
     if response.status_code != 200:
         try:
@@ -46,20 +49,37 @@ def _translation_prompt(target_language_name, source_language="auto"):
 
 
 def translate_text(text, target_language_name, source_language="auto"):
-    return _parse_json(_call({"contents": [{"parts": [{"text": _translation_prompt(target_language_name, source_language)}, {"text": text}]}]}))
+    return _parse_json(_call({"contents": [{"parts": [{"text": _translation_prompt(target_language_name, source_language)}, {"text": text}]}]}, {"responseMimeType": "application/json"}))
+
+
+def translate_segments(segments, target_language_name, source_language="auto"):
+    """Translate many text segments in one request, preserving their order."""
+    if not segments:
+        return []
+    source = "Detect the source language automatically." if source_language == "auto" else f"The source language is {LANGUAGES.get(source_language, source_language)}."
+    items = "\n".join(f"{i}: {json.dumps(text, ensure_ascii=False)}" for i, text in enumerate(segments))
+    prompt = (
+        "Translate each numbered text segment independently. "
+        f"{source} Translate to {target_language_name}. "
+        "Return ONLY a JSON array of strings in exactly the same order and count as the input. "
+        "Do not merge, omit, explain, or renumber segments.\n\n" + items
+    )
+    result = _parse_json(_call({"contents": [{"parts": [{"text": prompt}]}]}, {"responseMimeType": "application/json"}))
+    if not isinstance(result, list) or len(result) != len(segments):
+        raise ValueError("Gemini returned an invalid number of translated Word segments.")
+    return [str(item) for item in result]
 
 
 def translate_document(path, mime_type, target_language_name, source_language="auto"):
     with open(path, "rb") as file:
         encoded = base64.b64encode(file.read()).decode("utf-8")
-    return _parse_json(_call({"contents": [{"parts": [{"text": _translation_prompt(target_language_name, source_language)}, {"inlineData": {"mimeType": mime_type, "data": encoded}}]}]}))
+    return _parse_json(_call({"contents": [{"parts": [{"text": _translation_prompt(target_language_name, source_language)}, {"inlineData": {"mimeType": mime_type, "data": encoded}}]}]}, {"responseMimeType": "application/json"}))
 
 
 def translate_youtube(url, target_language_name, source_language="auto"):
     key = current_app.config["API_KEY"]
     if not key:
         raise ValueError("GEMINI_API_KEY is not configured.")
-
     model = current_app.config["GEMINI_MODEL"]
     endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions"
     source_instruction = "Detect the spoken language automatically." if source_language == "auto" else f"The spoken language is {LANGUAGES.get(source_language, source_language)}."
@@ -70,12 +90,10 @@ def translate_youtube(url, target_language_name, source_language="auto"):
         "detected_language_name, detected_language_code, transcription, translation."
     )
     payload = {"model": model, "input": [{"type": "text", "text": prompt}, {"type": "video", "uri": url}]}
-
     try:
         response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json", "x-goog-api-key": key}, timeout=max(current_app.config["GEMINI_TIMEOUT"], 180))
     except requests.RequestException as exc:
         raise ValueError(f"Gemini YouTube request failed: {exc}") from exc
-
     if response.status_code not in (200, 201):
         try:
             body = response.json()
@@ -83,12 +101,10 @@ def translate_youtube(url, target_language_name, source_language="auto"):
         except ValueError:
             message = response.text
         raise ValueError(f"Gemini YouTube error ({response.status_code}): {message}")
-
     try:
         data = response.json()
     except ValueError as exc:
         raise ValueError("Gemini returned a non-JSON YouTube response.") from exc
-
     output_text = data.get("output_text")
     if not output_text:
         for step in data.get("steps", []):
@@ -100,7 +116,6 @@ def translate_youtube(url, target_language_name, source_language="auto"):
                     break
             if output_text:
                 break
-
     if not output_text:
         raise ValueError("Gemini returned no YouTube translation output.")
     return _parse_json(output_text)
@@ -114,7 +129,7 @@ def process_audio(audio_path, target_language_name, source_language="auto"):
     else:
         source_name = LANGUAGES.get(source_language, source_language)
         prompt = f"The audio is in {source_name}. Transcribe it. Return ONLY JSON with language_code='{source_language}' and transcription."
-    result = _parse_json(_call({"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "audio/wav", "data": encoded}}]}]}))
+    result = _parse_json(_call({"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "audio/wav", "data": encoded}}]}]}, {"responseMimeType": "application/json"}))
     code = result.get("language_code", "en")
     transcription = result.get("transcription", "")
     language_name = LANGUAGES.get(code, "Unknown").capitalize()
