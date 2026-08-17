@@ -42,7 +42,11 @@ def generate_tts(text, api_key, output_path, language_name="English"):
             "model": TTS_MODEL,
             "input": prompt,
             "response_format": {"type": "audio"},
-            "generation_config": {"speech_config": [{"voice": "Kore"}]},
+            "generation_config": {
+                "speech_config": [
+                    {"voice": "Kore", "language": _language_code(language_name)}
+                ]
+            },
         },
         timeout=180,
     )
@@ -78,9 +82,35 @@ def generate_tts(text, api_key, output_path, language_name="English"):
         wav.writeframes(raw)
 
 
+def _language_code(language_name):
+    codes = {
+        "English": "en-US",
+        "Tamil": "ta-IN",
+        "Hindi": "hi-IN",
+        "Telugu": "te-IN",
+        "Kannada": "kn-IN",
+        "Malayalam": "ml-IN",
+        "Bengali": "bn-IN",
+        "Marathi": "mr-IN",
+        "Gujarati": "gu-IN",
+        "Punjabi": "pa-IN",
+        "Urdu": "ur-IN",
+        "Spanish": "es-ES",
+        "French": "fr-FR",
+        "German": "de-DE",
+        "Italian": "it-IT",
+        "Portuguese": "pt-BR",
+        "Japanese": "ja-JP",
+        "Korean": "ko-KR",
+        "Chinese": "zh-CN",
+        "Arabic": "ar-SA",
+    }
+    return codes.get(language_name, "en-US")
+
+
 def video_with_translated_audio(video_path, translated_audio_path, output_path):
-    # Pad the translated track so a shorter TTS result never truncates the
-    # original video. -shortest then ends at the original video duration.
+    # Keep the complete original video duration. If translated speech is
+    # shorter, apad fills the audio track until the video ends.
     _run([
         "-y", "-i", video_path, "-i", translated_audio_path,
         "-map", "0:v:0", "-map", "1:a:0",
