@@ -1,6 +1,6 @@
 import os
 
-from flask import Flask
+from flask import Flask, jsonify
 from config import Config
 
 
@@ -13,6 +13,10 @@ def create_app():
         static_folder=os.path.join(project_root, "static"),
     )
     app.config.from_object(Config)
+
+    @app.errorhandler(413)
+    def request_too_large(_error):
+        return jsonify(error="File is too large. The maximum upload size is 50 MB."), 413
 
     from routes.pages import pages_bp
     from routes.translation import translation_bp
