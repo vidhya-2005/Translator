@@ -41,7 +41,8 @@ def download_result(token, download_name):
     @after_this_request
     def cleanup(_response):
         try:
-            if os.path.exists(path): os.remove(path)
+            if os.path.exists(path):
+                os.remove(path)
         except OSError:
             pass
         return _response
@@ -168,9 +169,6 @@ def translate_visual():
         ext = os.path.splitext(file.filename)[1].lower()
         if ext not in (".png", ".jpg", ".jpeg", ".pdf"):
             return jsonify(error="Use PNG, JPG/JPEG, or PDF here."), 400
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY is not configured.")
         token = uuid.uuid4().hex
         tmp = _tmp_dir()
         input_path = os.path.join(tmp, f"{token}{ext}")
@@ -181,7 +179,8 @@ def translate_visual():
             result = translate_pdf(input_path, output_path, target, source)
             name, mime = f"{os.path.splitext(file.filename)[0]}_translated.pdf", "application/pdf"
         else:
-            result = translate_image(input_path, output_path, target, api_key, source)
+            mime_type = "image/png" if ext == ".png" else "image/jpeg"
+            result = translate_image(input_path, output_path, target, source, mime_type)
             name, mime = f"{os.path.splitext(file.filename)[0]}_translated.png", "image/png"
         media = _media_download_response(output_path, name, mime)
         return jsonify({**result, **media})
