@@ -1,9 +1,12 @@
-import os
+import base64
 import subprocess
 import uuid
+import wave
 
 import imageio_ffmpeg
-from gtts import gTTS
+import requests
+
+TTS_MODEL = "gemini-3.1-flash-tts-preview"
 
 
 def _ffmpeg():
@@ -13,38 +16,60 @@ def _ffmpeg():
 def _run(args):
     completed = subprocess.run([_ffmpeg(), *args], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if completed.returncode != 0:
-        raise ValueError(completed.stderr.decode("utf-8", errors="ignore")[-1000:])
+        raise ValueError(completed.stderr.decode("utf-8", errors="ignore")[-1500:])
 
 
 def convert_to_wav(input_path, output_path):
     _run(["-y", "-i", input_path, "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", output_path])
 
 
-def generate_tts(text, api_key, output_path, language_name=None):
-    """Generate speech server-side so playback does not depend on browser voices."""
+def generate_tts(text, api_key, output_path, language_name="English"):
     if not text.strip():
         raise ValueError("There is no translated text to generate audio from.")
-    if not language_name:
+    prompt = (
+        f"Speak the following text naturally and clearly in {language_name}. "
+        "Do not translate, summarize, or change the words. Use correct pronunciation "
+        "for the requested language.\n\n" + text
+    )
+    response = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key, "Api-Revision": "2026-05-20"},
+        json={
+            "model": TTS_MODEL,
+            "input": prompt,
+            "response_format": {"type": "audio"},
+            "generation_config": {"speech_config": [{"voice": "Kore"}]},
+        },
+        timeout=180,
+    )
+    if response.status_code not in (200, 201):
         try:
-            from flask import request
-            language_name = (request.form.get("target_language_name") or "").strip()
-            if not language_name:
-                data = request.get_json(silent=True) or {}
-                language_name = (data.get("language_name") or "").strip()
-        except RuntimeError:
-            language_name = ""
-    language_name = language_name or "English"
-    from services.audio_service import target_language_code
-    code = target_language_code(language_name).split("-")[0]
-    temp_mp3 = output_path + ".source.mp3"
+            message = response.json().get("error", {}).get("message", response.text)
+        except ValueError:
+            message = response.text
+        raise ValueError(f"Gemini TTS error ({response.status_code}): {message}")
     try:
-        gTTS(text=text, lang=code, slow=False).save(temp_mp3)
-        _run(["-y", "-i", temp_mp3, "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le", output_path])
-    except Exception as exc:
-        raise ValueError(f"Could not generate translated speech: {exc}") from exc
-    finally:
-        if os.path.exists(temp_mp3):
-            os.remove(temp_mp3)
+        data = response.json()
+    except ValueError as exc:
+        raise ValueError("Gemini TTS returned a non-JSON response.") from exc
+    audio = data.get("output_audio")
+    encoded = audio.get("data") if audio else None
+    if not encoded:
+        for step in data.get("steps", []):
+            for item in step.get("content", []):
+                if item.get("type") == "audio" and item.get("data"):
+                    encoded = item["data"]
+                    break
+            if encoded:
+                break
+    if not encoded:
+        raise ValueError("Gemini TTS returned no audio data.")
+    raw = base64.b64decode(encoded)
+    with wave.open(output_path, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(raw)
 
 
 def video_with_translated_audio(video_path, translated_audio_path, output_path):
