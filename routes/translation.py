@@ -37,6 +37,7 @@ def download_result(token, download_name):
     if not os.path.exists(path):
         return jsonify(error="This download has expired. Please translate the file again."), 404
     response = send_file(path, as_attachment=True, download_name=os.path.basename(download_name))
+
     @after_this_request
     def cleanup(_response):
         try:
@@ -45,6 +46,7 @@ def download_result(token, download_name):
         except OSError:
             pass
         return _response
+
     return response
 
 
@@ -79,7 +81,7 @@ def file_translation():
         mime_type, extension = get_file_type(file.filename)
         audio_video = (file.mimetype or "").startswith(("audio/", "video/"))
         if not mime_type and not audio_video:
-            return jsonify(error="Unsupported file. Use PNG, JPG/JPEG, PDF, DOCX, audio or video."), 400
+            return jsonify(error="Unsupported file. Use PNG, JPG/JPEG, PDF, audio or video."), 400
         token = uuid.uuid4().hex
         tmp = _tmp_dir()
         input_path = os.path.join(tmp, f"{token}{extension or os.path.splitext(file.filename)[1].lower()}")
@@ -213,30 +215,33 @@ def word_translation():
         target = request.form.get("target_language_name", "English")
         validate_source_target(source, target)
         tmp = _tmp_dir()
-        token = str(uuid.uuid4())
+        token = uuid.uuid4().hex
         input_path = os.path.join(tmp, f"{token}.docx")
         output_path = os.path.join(tmp, f"{token}_translated.docx")
         file.save(input_path)
+        original_text = extract_docx_text(input_path)
+        if not original_text:
+            return jsonify(error="No readable text found in the Word document."), 400
         translate_docx_preserving_format(input_path, output_path, translate_text, target, source)
-        @after_this_request
-        def cleanup(response):
-            for path in (input_path, output_path):
-                if path and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-            return response
+        translated_text = extract_docx_text(output_path)
         download_name = f"{os.path.splitext(os.path.basename(file.filename))[0]}_translated.docx"
-        return send_file(output_path, as_attachment=True, download_name=download_name, mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        media = _media_download_response(output_path, download_name, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        return jsonify({
+            "detected_language_name": "Auto-detected" if source == "auto" else source,
+            "detected_language_code": source,
+            "transcription": original_text,
+            "translation": translated_text,
+            **media,
+        })
     except Exception as exc:
+        return _error_response(exc)
+    finally:
         for path in (input_path, output_path):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
                 except OSError:
                     pass
-        return _error_response(exc)
 
 
 @translation_bp.post("/translate-youtube")
@@ -269,6 +274,7 @@ def text_to_speech():
         output_path = os.path.join(_tmp_dir(), f"{uuid.uuid4().hex}.wav")
         generate_tts(text, api_key, output_path, language_name)
         response = send_file(output_path, mimetype="audio/wav", as_attachment=False)
+
         @after_this_request
         def cleanup(_response):
             try:
@@ -277,6 +283,7 @@ def text_to_speech():
             except OSError:
                 pass
             return _response
+
         return response
     except Exception as exc:
         if output_path and os.path.exists(output_path):
