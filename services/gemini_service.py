@@ -103,13 +103,7 @@ def translate_youtube(url, target_language_name, source_language="auto"):
     endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions"
     source_instruction = "Detect the spoken language automatically." if source_language == "auto" else f"The spoken language is {LANGUAGES.get(source_language, source_language)}."
     prompt = f"Analyze this public YouTube video. {source_instruction} Transcribe the spoken content and translate it into {target_language_name}. Do not summarize. Return ONLY valid JSON with no markdown using exactly these keys: detected_language_name, detected_language_code, transcription, translation."
-    payload = {
-        "model": model,
-        "input": [
-            {"type": "text", "text": prompt},
-            {"type": "video", "uri": url},
-        ],
-    }
+    payload = {"model": model, "input": [{"type": "text", "text": prompt}, {"type": "video", "uri": url}]}
     try:
         response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json", "x-goog-api-key": key}, timeout=max(current_app.config["GEMINI_TIMEOUT"], 180))
     except requests.RequestException as exc:
@@ -143,14 +137,21 @@ def process_audio(audio_path, target_language_name, source_language="auto"):
     with open(audio_path, "rb") as audio:
         encoded = base64.b64encode(audio.read()).decode()
     if source_language == "auto":
-        prompt = "Transcribe this audio and identify its language. Return ONLY JSON with keys: language_code and transcription."
+        source_instruction = "Detect the spoken language automatically."
     else:
-        prompt = f"The audio is in {LANGUAGES.get(source_language, source_language)}. Transcribe it. Return ONLY JSON with language_code='{source_language}' and transcription."
+        source_instruction = f"The audio is in {LANGUAGES.get(source_language, source_language)} and its language code is {source_language}."
+    prompt = (
+        f"{source_instruction} Transcribe all spoken content and translate the transcription into {target_language_name}. "
+        "Return ONLY valid JSON with exactly these keys: language_code, transcription, translation. "
+        "Do not summarize or omit speech."
+    )
     result = _parse_json(_call({"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "audio/wav", "data": encoded}}]}]}, {"responseMimeType": "application/json"}))
-    code = result.get("language_code", "en")
-    transcription = result.get("transcription", "")
+    code = result.get("language_code", source_language if source_language != "auto" else "en")
     language_name = LANGUAGES.get(code, "Unknown").capitalize()
+    transcription = str(result.get("transcription", "")).strip()
+    translated = str(result.get("translation", "")).strip()
     if not transcription:
         return {"detected_language_name": language_name, "detected_language_code": code, "transcription": "(No speech detected)", "translation": ""}
-    translated = _call({"contents": [{"parts": [{"text": f"Translate the following text from {language_name} to {target_language_name}: {transcription}"}]}]}).strip()
+    if not translated:
+        raise ValueError("Gemini returned a transcription but no translated speech text.")
     return {"detected_language_name": language_name, "detected_language_code": code, "transcription": transcription, "translation": translated}
