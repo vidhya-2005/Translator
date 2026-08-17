@@ -20,10 +20,20 @@ def convert_to_wav(input_path, output_path):
     _run(["-y", "-i", input_path, "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", output_path])
 
 
-def generate_tts(text, api_key, output_path, language_name="English"):
-    """Generate multilingual speech without relying on browser-installed voices."""
+def generate_tts(text, api_key, output_path, language_name=None):
+    """Generate speech server-side so playback does not depend on browser voices."""
     if not text.strip():
         raise ValueError("There is no translated text to generate audio from.")
+    if not language_name:
+        try:
+            from flask import request
+            language_name = (request.form.get("target_language_name") or "").strip()
+            if not language_name:
+                data = request.get_json(silent=True) or {}
+                language_name = (data.get("language_name") or "").strip()
+        except RuntimeError:
+            language_name = ""
+    language_name = language_name or "English"
     from services.audio_service import target_language_code
     code = target_language_code(language_name).split("-")[0]
     temp_mp3 = output_path + ".source.mp3"
