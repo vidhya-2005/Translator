@@ -104,8 +104,15 @@ def translate_youtube(url, target_language_name, source_language="auto"):
     endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions"
     source_instruction = "Detect the spoken language automatically." if source_language == "auto" else f"The spoken language is {LANGUAGES.get(source_language, source_language)}."
     prompt = f"Analyze this public YouTube video. {source_instruction} Transcribe the spoken content and translate it into {target_language_name}. Do not summarize. Return ONLY valid JSON with no markdown using exactly these keys: detected_language_name, detected_language_code, transcription, translation."
+    payload = {
+        "model": model,
+        "input": [
+            {"type": "video", "uri": url, "mime_type": "video/mp4"},
+            {"type": "text", "text": prompt},
+        ],
+    }
     try:
-        response = requests.post(endpoint, json={"model": model, "input": [{"type": "text", "text": prompt}, {"type": "video", "uri": url}]}, headers={"Content-Type": "application/json", "x-goog-api-key": key}, timeout=max(current_app.config["GEMINI_TIMEOUT"], 180))
+        response = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json", "x-goog-api-key": key}, timeout=max(current_app.config["GEMINI_TIMEOUT"], 180))
     except requests.RequestException as exc:
         raise ValueError(f"Gemini YouTube request failed: {exc}") from exc
     if response.status_code not in (200, 201):
