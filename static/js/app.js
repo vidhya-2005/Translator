@@ -6,6 +6,7 @@ const sourceLang = document.getElementById("source-lang");
 const targetLang = document.getElementById("target-lang");
 const sourceSearch = document.getElementById("source-search");
 const targetSearch = document.getElementById("target-search");
+const swapLanguages = document.getElementById("swap-languages");
 const translateBtn = document.getElementById("translate-btn");
 const recordBtn = document.getElementById("record-btn");
 const transcription = document.getElementById("transcription");
@@ -53,7 +54,7 @@ function syncLanguageInput(select, input) { const option = select.options[select
 sourceSearch.addEventListener("input", () => syncLanguageSearch(sourceSearch, sourceLang)); targetSearch.addEventListener("input", () => syncLanguageSearch(targetSearch, targetLang));
 sourceSearch.addEventListener("change", () => syncLanguageSearch(sourceSearch, sourceLang)); targetSearch.addEventListener("change", () => syncLanguageSearch(targetSearch, targetLang));
 sourceLang.addEventListener("change", () => syncLanguageInput(sourceLang, sourceSearch)); targetLang.addEventListener("change", () => syncLanguageInput(targetLang, targetSearch));
-swapLanguages.addEventListener("click", () => { if (sourceLang.value === "auto") return; const s = sourceLang.value; sourceLang.value = targetLang.value; targetLang.value = s; syncLanguageInput(sourceLang, sourceSearch); syncLanguageInput(targetLang, targetSearch); });
+if (swapLanguages) swapLanguages.addEventListener("click", () => { if (sourceLang.value === "auto") return; const s = sourceLang.value; sourceLang.value = targetLang.value; targetLang.value = s; syncLanguageInput(sourceLang, sourceSearch); syncLanguageInput(targetLang, targetSearch); });
 function setProcessing(value) { translateBtn.disabled = value; methodButtons.forEach(b => b.disabled = value); recordBtn.disabled = value; if (processingPanel) processingPanel.classList.add("hidden"); }
 function showResult(data) { transcription.value = data.transcription || ""; translation.value = data.translation || ""; detectedLanguage.textContent = `Detected language: ${data.detected_language_name || data.detected_language_code || "—"}`; playBtn.disabled = !data.translation; resultsSection.classList.remove("hidden"); setTimeout(() => resultsSection.scrollIntoView({behavior:"smooth",block:"start"}),80); }
 function showDownload(data, title, detail) { if (!data.download_url) throw new Error("The translated file was created, but no download link was returned."); downloadTitle.textContent = title; downloadDetail.textContent = detail; downloadResultBtn.href = data.download_url; downloadResultBtn.download = data.download_name || "translated_file"; downloadResult.classList.remove("hidden"); setTimeout(() => downloadResult.scrollIntoView({behavior:"smooth",block:"start"}),80); }
@@ -90,15 +91,14 @@ recordBtn.addEventListener("click", async () => {
     } catch (_) { showError("Microphone access was denied or is unavailable."); }
 });
 copyBtn.addEventListener("click", async () => { if (translation.value) await navigator.clipboard.writeText(translation.value); });
-
 playBtn.addEventListener("click", async () => {
     const text = translation.value.trim(); if (!text) return;
-    if (currentSpeechAudio) { currentSpeechAudio.pause(); currentSpeechAudio = null; return; }
+    if (currentSpeechAudio) { currentSpeechAudio.pause(); currentSpeechAudio = null; playBtn.disabled = false; return; }
     playBtn.disabled = true; showError("");
     try {
         let audioUrl = speechCache.get(text);
         if (!audioUrl) {
-            const response = await fetch("/tts", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});
+            const response = await fetch("/tts", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,language_name:languageName()})});
             if (!response.ok) { let message = `Speech generation failed (${response.status}).`; try { message = (await response.json()).error || message; } catch (_) {} throw new Error(message); }
             const blob = await response.blob(); audioUrl = URL.createObjectURL(blob); speechCache.set(text, audioUrl);
         }
@@ -107,5 +107,4 @@ playBtn.addEventListener("click", async () => {
         currentSpeechAudio.onerror = () => { currentSpeechAudio = null; playBtn.disabled = false; showError("Could not play the generated translation audio."); };
         await currentSpeechAudio.play();
     } catch (error) { currentSpeechAudio = null; playBtn.disabled = false; showError(error.message); }
-    finally { if (!currentSpeechAudio) playBtn.disabled = false; }
 });
