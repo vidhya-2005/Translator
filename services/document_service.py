@@ -1,5 +1,4 @@
 import base64
-import json
 import os
 from io import BytesIO
 from docx import Document
@@ -61,24 +60,29 @@ def _paragraphs(document):
 
 
 def translate_docx_preserving_format(path, output_path, translate_text_func, target_language, source_language="auto"):
+    """Translate Word runs in batches while keeping each run's formatting."""
     document = Document(path)
-    paragraphs = _paragraphs(document)
     candidates = []
-    for paragraph in paragraphs:
-        text = "".join(run.text for run in paragraph.runs).strip()
-        if text:
-            candidates.append((paragraph, text))
+    for paragraph in _paragraphs(document):
+        for run in paragraph.runs:
+            if run.text and run.text.strip():
+                candidates.append((run, run.text))
+
     if not candidates:
         raise ValueError("No readable text found in the Word document.")
 
-    translations = translate_segments([text for _, text in candidates], target_language, source_language)
-    for (paragraph, _), translated in zip(candidates, translations):
-        runs = [run for run in paragraph.runs if run.text and run.text.strip()]
-        if not runs:
-            continue
-        runs[0].text = translated
-        for run in runs[1:]:
-            run.text = ""
+    translations = translate_segments(
+        [text for _, text in candidates],
+        target_language,
+        source_language,
+    )
+
+    if len(translations) != len(candidates):
+        raise ValueError("Word translation returned an incomplete result.")
+
+    for (run, _), translated in zip(candidates, translations):
+        run.text = translated
+
     document.save(output_path)
 
 
@@ -143,8 +147,6 @@ def translate_image_file(path, output_path, target_language, source_language, mi
     analysis = _analyze_visual(path, mime_type, target_language, source_language)
     image = Image.open(path)
     translated = _render_translated_image(image, analysis)
-    # The route always gives this function a .png output path, so the file
-    # contents must actually be PNG even when the source was JPG/JPEG.
     translated.save(output_path, format="PNG", optimize=True)
     return _result(analysis)
 
