@@ -2,8 +2,7 @@ import os
 import uuid
 from flask import Blueprint, jsonify, request, send_file, after_this_request
 from services.gemini_service import translate_text, translate_document, process_audio, translate_youtube
-from services.audio_service import convert_to_wav
-from services.media_output_service import convert_to_wav as convert_media_to_wav, generate_tts, video_with_translated_audio, audio_as_mp3
+from services.media_output_service import convert_to_wav, generate_tts, video_with_translated_audio, audio_as_mp3
 from services.document_service import get_file_type, extract_docx_text, translate_docx_preserving_format
 from services.document_service import translate_image_file as translate_image, translate_pdf_file as translate_pdf
 from utils.validation import validate_source_target
@@ -66,6 +65,8 @@ def text_translation():
 
 @translation_bp.post("/translate")
 def file_translation():
+    """Compatibility endpoint for ordinary file extraction/translation."""
+    input_path = wav_path = None
     try:
         if "file" not in request.files:
             return jsonify(error="No file part in the request"), 400
@@ -79,29 +80,31 @@ def file_translation():
         audio_video = (file.mimetype or "").startswith(("audio/", "video/"))
         if not mime_type and not audio_video:
             return jsonify(error="Unsupported file. Use PNG, JPG/JPEG, PDF, DOCX, audio or video."), 400
-        token = str(uuid.uuid4())
+        token = uuid.uuid4().hex
         tmp = _tmp_dir()
         input_path = os.path.join(tmp, f"{token}{extension or os.path.splitext(file.filename)[1].lower()}")
         wav_path = os.path.join(tmp, f"{token}.wav")
         file.save(input_path)
-        try:
-            if audio_video:
-                convert_to_wav(input_path, wav_path)
-                return jsonify(process_audio(wav_path, target, source))
-            if extension == ".docx":
-                text = extract_docx_text(input_path)
-                if not text:
-                    return jsonify(error="No readable text found in the Word document."), 400
-                return jsonify(translate_text(text, target, source))
-            if extension == ".doc":
-                return jsonify(error="Legacy .doc files are not supported. Please save the file as .docx and upload again."), 400
-            return jsonify(translate_document(input_path, mime_type, target, source))
-        finally:
-            for path in (input_path, wav_path):
-                if os.path.exists(path):
-                    os.remove(path)
+        if audio_video:
+            convert_to_wav(input_path, wav_path)
+            return jsonify(process_audio(wav_path, target, source))
+        if extension == ".docx":
+            text = extract_docx_text(input_path)
+            if not text:
+                return jsonify(error="No readable text found in the Word document."), 400
+            return jsonify(translate_text(text, target, source))
+        if extension == ".doc":
+            return jsonify(error="Legacy .doc files are not supported. Please save the file as .docx and upload again."), 400
+        return jsonify(translate_document(input_path, mime_type, target, source))
     except Exception as exc:
         return _error_response(exc)
+    finally:
+        for path in (input_path, wav_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
 
 @translation_bp.post("/translate-media")
@@ -128,7 +131,7 @@ def translate_media():
         tts_path = os.path.join(tmp, f"{token}_translated.wav")
         output_path = os.path.join(tmp, f"{token}_output.{ 'mp4' if is_video else 'mp3' }")
         file.save(input_path)
-        convert_media_to_wav(input_path, wav_path)
+        convert_to_wav(input_path, wav_path)
         result = process_audio(wav_path, target, source)
         if not result.get("translation"):
             raise ValueError("No translatable speech was detected in the uploaded media.")
@@ -147,11 +150,11 @@ def translate_media():
         return _error_response(exc)
     finally:
         for path in (input_path, wav_path, tts_path, output_path):
-            try:
-                if path and os.path.exists(path):
+            if path and os.path.exists(path):
+                try:
                     os.remove(path)
-            except OSError:
-                pass
+                except OSError:
+                    pass
 
 
 @translation_bp.post("/translate-visual")
@@ -188,11 +191,11 @@ def translate_visual():
         return _error_response(exc)
     finally:
         for path in (input_path, output_path):
-            try:
-                if path and os.path.exists(path):
+            if path and os.path.exists(path):
+                try:
                     os.remove(path)
-            except OSError:
-                pass
+                except OSError:
+                    pass
 
 
 @translation_bp.post("/translate-word")
@@ -218,21 +221,21 @@ def word_translation():
         @after_this_request
         def cleanup(response):
             for path in (input_path, output_path):
-                try:
-                    if path and os.path.exists(path):
+                if path and os.path.exists(path):
+                    try:
                         os.remove(path)
-                except OSError:
-                    pass
+                    except OSError:
+                        pass
             return response
         download_name = f"{os.path.splitext(os.path.basename(file.filename))[0]}_translated.docx"
         return send_file(output_path, as_attachment=True, download_name=download_name, mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     except Exception as exc:
         for path in (input_path, output_path):
-            try:
-                if path and os.path.exists(path):
+            if path and os.path.exists(path):
+                try:
                     os.remove(path)
-            except OSError:
-                pass
+                except OSError:
+                    pass
         return _error_response(exc)
 
 
