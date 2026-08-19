@@ -2,6 +2,7 @@ import base64
 import html
 import os
 import tempfile
+import time
 from io import BytesIO
 
 import requests
@@ -9,6 +10,7 @@ from docx import Document
 from googletrans import LANGUAGES
 from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfReader
+from flask import current_app
 
 from services.gemini_service import _call, _parse_json, translate_segments
 
@@ -186,7 +188,6 @@ def _render_translated_image(image, analysis, target_language="English"):
         x2 = min(width, x + w)
         y2 = min(height, y + h)
 
-        # Sample the surrounding pixels instead of assuming a white background.
         samples = []
         for sx, sy in ((x - 2, y + h // 2), (x2 + 2, y + h // 2), (x + w // 2, y - 2), (x + w // 2, y2 + 2)):
             if 0 <= sx < width and 0 <= sy < height:
@@ -216,97 +217,112 @@ def _result(analysis):
     }
 
 
-def _aspect_ratio(width, height):
-    ratios = {
-        "1:1": 1.0,
-        "1:4": 0.25,
-        "4:1": 4.0,
-        "1:8": 0.125,
-        "8:1": 8.0,
-        "2:3": 2 / 3,
-        "3:2": 3 / 2,
-        "3:4": 3 / 4,
-        "4:3": 4 / 3,
-        "4:5": 4 / 5,
-        "5:4": 5 / 4,
-        "9:16": 9 / 16,
-        "16:9": 16 / 9,
-        "21:9": 21 / 9,
-    }
-    value = width / height
-    return min(ratios, key=lambda key: abs(ratios[key] - value))
-
-
 def _gemini_edit_image(path, mime_type, target_language):
-    image_data = encode_file(path)
-    with Image.open(path) as source:
-        width, height = source.size
+    """Use Nano Banana 2 for the actual image edit.
+
+    This is intentionally separate from the OCR/metadata call. The image model is
+    responsible for rendering the translated script, so Pillow is never used as the
+    primary renderer and cannot create missing-glyph square boxes in the output.
+    """
+    api_key = current_app.config.get("API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is not configured.")
+
     prompt = (
         f"Translate ONLY the visible human-readable text in this image into {target_language}. "
         "This is an image-editing task, not a redesign. Preserve the original image as closely as possible. "
-        "Keep the exact composition, objects, people, illustrations, background, colors, borders, spacing, "
-        "decorations, lighting, perspective and overall layout unchanged. Change ONLY the written text. "
+        "Keep the same canvas size, composition, objects, people, illustrations, background, colors, borders, "
+        "spacing, decorations, lighting, perspective and overall style. Change ONLY the written text. "
         "Keep each translated text in the same location and approximately the same size, weight, alignment "
         "and visual style as the original. Do not add, remove, invent, summarize or reorder content. "
-        "Render the requested script with proper Unicode glyphs; NEVER use square boxes or missing-glyph symbols."
+        "Render the target script correctly with real Unicode glyphs. NEVER use square boxes or missing-glyph symbols. "
+        "Do not cover non-text artwork with white rectangles."
     )
-    response = requests.post(
-        "https://generativelanguage.googleapis.com/v1beta/interactions",
-        headers={"Content-Type": "application/json", "x-goog-api-key": os.environ.get("GEMINI_API_KEY", "")},
-        json={
-            "model": IMAGE_MODEL,
-            "input": [
-                {"type": "image", "mime_type": mime_type, "data": image_data},
-                {"type": "text", "text": prompt},
-            ],
-            "response_format": {
-                "type": "image",
-                "mime_type": "image/png",
-                "aspect_ratio": _aspect_ratio(width, height),
-                "image_size": "1K",
-            },
-        },
-        timeout=180,
-    )
-    if response.status_code not in (200, 201):
+
+    payload = {
+        "model": IMAGE_MODEL,
+        "input": [
+            {"type": "text", "text": prompt},
+            {"type": "image", "mime_type": mime_type, "data": encode_file(path)},
+        ],
+        "response_format": {"type": "image", "mime_type": "image/png"},
+    }
+    endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions"
+
+    last_message = "unknown error"
+    for attempt in range(3):
         try:
-            message = response.json().get("error", {}).get("message", response.text)
-        except ValueError:
-            message = response.text
-        raise ValueError(f"Gemini image editing error ({response.status_code}): {message}")
-
-    data = response.json()
-    encoded = None
-    image = data.get("output_image")
-    if image:
-        encoded = image.get("data")
-    if not encoded:
-        for step in data.get("steps", []):
-            if step.get("type") != "model_output":
+            response = requests.post(
+                endpoint,
+                headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                json=payload,
+                timeout=max(current_app.config.get("GEMINI_TIMEOUT", 120), 180),
+            )
+        except requests.RequestException as exc:
+            last_message = str(exc)
+            if attempt < 2:
+                time.sleep(2 ** attempt)
                 continue
-            for item in step.get("content", []):
-                if item.get("type") == "image" and item.get("data"):
-                    encoded = item["data"]
-                    break
-            if encoded:
-                break
-    if not encoded:
-        raise ValueError("Gemini image editing returned no image output.")
+            raise ValueError(f"Nano Banana request failed: {exc}") from exc
 
-    edited = Image.open(BytesIO(base64.b64decode(encoded))).convert("RGB")
-    if edited.size != (width, height):
-        edited = edited.resize((width, height), Image.Resampling.LANCZOS)
-    return edited
+        if response.status_code in (200, 201):
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise ValueError("Nano Banana returned a non-JSON response.") from exc
+
+            encoded = None
+            output_image = data.get("output_image")
+            if isinstance(output_image, dict):
+                encoded = output_image.get("data")
+
+            if not encoded:
+                for step in data.get("steps", []):
+                    if step.get("type") != "model_output":
+                        continue
+                    for item in step.get("content", []):
+                        if item.get("type") == "image" and item.get("data"):
+                            encoded = item["data"]
+                            break
+                    if encoded:
+                        break
+
+            if not encoded:
+                raise ValueError("Nano Banana returned no edited image.")
+
+            try:
+                edited = Image.open(BytesIO(base64.b64decode(encoded))).convert("RGB")
+            except Exception as exc:
+                raise ValueError("Nano Banana returned invalid image data.") from exc
+            return edited
+
+        try:
+            body = response.json()
+            last_message = body.get("error", {}).get("message") or body.get("message") or response.text
+        except ValueError:
+            last_message = response.text
+
+        if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+            time.sleep(2 ** attempt)
+            continue
+        raise ValueError(f"Gemini image editing error ({response.status_code}): {last_message}")
+
+    raise ValueError(f"Nano Banana request failed: {last_message}")
 
 
 def translate_image_file(path, output_path, target_language, source_language, mime_type):
-    analysis = _analyze_visual(path, mime_type, target_language, source_language)
+    # The actual image edit is the source of truth. Metadata/OCR is best-effort so
+    # a metadata parsing problem can never turn a valid translated image into HTTP 500.
     try:
-        translated = _gemini_edit_image(path, mime_type, target_language)
+        analysis = _analyze_visual(path, mime_type, target_language, source_language)
     except Exception:
-        # Keep a deterministic local fallback. The target-script font is downloaded
-        # from the Noto project when it is not already installed on the server.
-        translated = _render_translated_image(Image.open(path), analysis, target_language)
+        analysis = {
+            "detected_language_name": "Auto-detected" if source_language == "auto" else LANGUAGES.get(source_language, source_language).capitalize(),
+            "detected_language_code": "" if source_language == "auto" else source_language,
+            "regions": [],
+        }
+
+    translated = _gemini_edit_image(path, mime_type, target_language)
 
     if mime_type == "image/jpeg":
         translated.save(output_path, format="JPEG", quality=95, optimize=True)
