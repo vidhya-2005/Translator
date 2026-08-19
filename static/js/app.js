@@ -32,8 +32,77 @@ let chunks = [];
 let recordedFile = null;
 let currentSpeechAudio = null;
 let speechCache = new Map();
+let processingStartedAt = 0;
+let processingTimer = null;
 
 function showError(message) { errorMessage.textContent = message; }
+
+function ensureProcessingUI() {
+    if (document.getElementById("translation-processing")) return;
+    const el = document.createElement("div");
+    el.id = "translation-processing";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    el.innerHTML = `
+        <div class="processing-spinner" aria-hidden="true"></div>
+        <div class="processing-copy">
+            <strong id="processing-title">Translating…</strong>
+            <span id="processing-detail">Working on your translation. Please keep this page open.</span>
+        </div>
+    `;
+    translateBtn.parentNode.insertBefore(el, translateBtn.nextSibling);
+
+    const style = document.createElement("style");
+    style.textContent = `
+        #translation-processing { display:none; align-items:center; gap:12px; margin:12px 0 0; padding:12px 14px; border:1px solid rgba(100,100,100,.16); border-radius:12px; background:rgba(100,100,100,.045); }
+        #translation-processing.visible { display:flex; }
+        .processing-spinner { width:18px; height:18px; flex:0 0 18px; border:2px solid rgba(100,100,100,.2); border-top-color:currentColor; border-radius:50%; animation:translation-spin .75s linear infinite; }
+        .processing-copy { display:flex; flex-direction:column; gap:2px; min-width:0; }
+        .processing-copy strong { font-size:.94rem; line-height:1.25; }
+        .processing-copy span { font-size:.82rem; opacity:.68; line-height:1.35; }
+        @keyframes translation-spin { to { transform:rotate(360deg); } }
+    `;
+    document.head.appendChild(style);
+}
+
+function setProcessing(value, method = activeMethod) {
+    ensureProcessingUI();
+    const processingUI = document.getElementById("translation-processing");
+    const title = document.getElementById("processing-title");
+    const detail = document.getElementById("processing-detail");
+
+    translateBtn.disabled = value;
+    methodButtons.forEach(b => b.disabled = value);
+    recordBtn.disabled = value;
+
+    if (!value) {
+        processingUI.classList.remove("visible");
+        if (processingTimer) clearInterval(processingTimer);
+        processingTimer = null;
+        processingStartedAt = 0;
+        return;
+    }
+
+    const labels = {
+        text: ["Translating…", "Almost there."],
+        file: ["Translating file…", "Larger files can take a little longer."],
+        word: ["Translating document…", "Keeping the document formatting intact."],
+        youtube: ["Translating video…", "Fetching and translating the spoken content."],
+        record: ["Translating recording…", "Converting speech and translating it."],
+    };
+    const [label, hint] = labels[method] || labels.text;
+    title.textContent = label;
+    detail.textContent = hint;
+    processingUI.classList.add("visible");
+    processingStartedAt = Date.now();
+
+    if (processingTimer) clearInterval(processingTimer);
+    processingTimer = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - processingStartedAt) / 1000);
+        if (elapsed >= 8) detail.textContent = "Still working — the translation service is processing your request.";
+        if (elapsed >= 25) detail.textContent = "Still working — please keep this page open. No action is needed.";
+    }, 1000);
+}
 
 function resetOutput() {
     resultsSection.classList.add("hidden");
@@ -92,12 +161,6 @@ if (swapLanguages) swapLanguages.addEventListener("click", () => {
     syncLanguageInput(sourceLang, sourceSearch);
     syncLanguageInput(targetLang, targetSearch);
 });
-
-function setProcessing(value) {
-    translateBtn.disabled = value;
-    methodButtons.forEach(b => b.disabled = value);
-    recordBtn.disabled = value;
-}
 
 function showResult(data) {
     transcription.value = data.transcription || "";
@@ -172,7 +235,7 @@ async function translateWord(file) {
 translateBtn.addEventListener("click", async () => {
     resetOutput();
     try {
-        setProcessing(true);
+        setProcessing(true, activeMethod);
         if (activeMethod === "text") {
             if (!textInput.value.trim()) throw new Error("Enter some text to translate.");
             await translateText();
